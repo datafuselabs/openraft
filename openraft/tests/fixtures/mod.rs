@@ -67,6 +67,7 @@ use crate::fixtures::logging::init_file_logging;
 
 pub mod logging;
 
+#[allow(unused)]
 macro_rules! func_name {
     () => {{
         fn f() {}
@@ -80,6 +81,7 @@ macro_rules! func_name {
     }};
 }
 
+#[allow(unused)]
 macro_rules! init_ut {
     () => {{
         let name = func_name!();
