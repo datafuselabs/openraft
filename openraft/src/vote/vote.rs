@@ -1,13 +1,11 @@
 use std::fmt::Formatter;
 
-use serde::Deserialize;
-use serde::Serialize;
-
 use crate::LeaderId;
 use crate::RaftTypeConfig;
 
 /// `Vote` represent the privilege of a node.
-#[derive(Debug, Clone, Copy, Default, PartialOrd, Ord, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialOrd, Ord, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub struct Vote<C: RaftTypeConfig> {
     pub term: u64,
     pub node_id: C::NodeId,

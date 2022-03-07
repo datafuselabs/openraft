@@ -19,8 +19,6 @@ use futures::future::Abortable;
 use maplit::btreeset;
 use rand::thread_rng;
 use rand::Rng;
-use serde::Deserialize;
-use serde::Serialize;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -73,7 +71,8 @@ use crate::Update;
 /// - and the config.
 ///
 /// An active config is just the last seen config in raft spec.
-#[derive(Clone, Eq, Serialize, Deserialize)]
+#[derive(Clone, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub struct EffectiveMembership<C: RaftTypeConfig> {
     /// The id of the log that applies this membership config
     pub log_id: LogId<C::NodeId>,
@@ -706,7 +705,8 @@ pub(self) enum SnapshotUpdate<C: RaftTypeConfig> {
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 /// All possible states of a Raft node.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub enum State {
     /// The node is completely passive; replicating entries, but neither voting nor timing out.
     Learner,

@@ -3,8 +3,6 @@ use std::fmt::Formatter;
 use std::ops::Bound;
 
 use anyerror::AnyError;
-use serde::Deserialize;
-use serde::Serialize;
 
 use crate::LogId;
 use crate::RaftTypeConfig;
@@ -36,8 +34,9 @@ impl<C: RaftTypeConfig, T> ToStorageResult<C, T> for Result<T, std::io::Error> {
 
 /// An error that occurs when the RaftStore impl runs defensive check of input or output.
 /// E.g. re-applying an log entry is a violation that may be a potential bug.
-#[derive(Debug, Clone, thiserror::Error, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(bound = "")]
+#[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(bound = ""))]
 pub struct DefensiveError<C: RaftTypeConfig> {
     /// The subject that violates store defensive check, e.g. hard-state, log or state machine.
     pub subject: ErrorSubject<C>,
@@ -64,8 +63,9 @@ impl<C: RaftTypeConfig> std::fmt::Display for DefensiveError<C> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(bound = "")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(bound = ""))]
 pub enum ErrorSubject<C: RaftTypeConfig> {
     /// A general storage error
     Store,
@@ -95,7 +95,8 @@ pub enum ErrorSubject<C: RaftTypeConfig> {
 }
 
 /// What it is doing when an error occurs.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub enum ErrorVerb {
     Read,
     Write,
@@ -104,8 +105,9 @@ pub enum ErrorVerb {
 }
 
 /// Violations a store would return when running defensive check.
-#[derive(Debug, Clone, thiserror::Error, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(bound = "")]
+#[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(bound = ""))]
 pub enum Violation<C: RaftTypeConfig> {
     #[error("term can only be change to a greater value, current: {curr}, change to {to}")]
     TermNotAscending { curr: u64, to: u64 },
@@ -161,8 +163,9 @@ pub enum Violation<C: RaftTypeConfig> {
 }
 
 /// A storage error could be either a defensive check error or an error occurred when doing the actual io operation.
-#[derive(Debug, Clone, thiserror::Error, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(bound = "")]
+#[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(bound = ""))]
 pub enum StorageError<C: RaftTypeConfig> {
     /// An error raised by defensive check.
     #[error(transparent)]
@@ -203,8 +206,9 @@ impl<C: RaftTypeConfig> StorageError<C> {
 }
 
 /// Error that occurs when operating the store.
-#[derive(Debug, Clone, thiserror::Error, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(bound = "")]
+#[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(bound = ""))]
 pub struct StorageIOError<C: RaftTypeConfig> {
     subject: ErrorSubject<C>,
     verb: ErrorVerb,

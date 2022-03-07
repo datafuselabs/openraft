@@ -6,8 +6,6 @@ use std::fmt::Debug;
 use std::time::Duration;
 
 use anyerror::AnyError;
-use serde::Deserialize;
-use serde::Serialize;
 
 use crate::raft_types::SnapshotSegmentId;
 use crate::LogId;
@@ -18,7 +16,8 @@ use crate::StorageError;
 use crate::Vote;
 
 /// Fatal is unrecoverable and shuts down raft at once.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub enum Fatal<C: RaftTypeConfig> {
     #[error(transparent)]
     StorageError(#[from] StorageError<C>),
@@ -51,19 +50,22 @@ where E: TryInto<Fatal<C>> + Clone
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, thiserror::Error, derive_more::TryInto)]
+#[derive(Debug, Clone, thiserror::Error, derive_more::TryInto)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub enum AppendEntriesError<C: RaftTypeConfig> {
     #[error(transparent)]
     Fatal(#[from] Fatal<C>),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, thiserror::Error, derive_more::TryInto)]
+#[derive(Debug, Clone, thiserror::Error, derive_more::TryInto)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub enum VoteError<C: RaftTypeConfig> {
     #[error(transparent)]
     Fatal(#[from] Fatal<C>),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, thiserror::Error, derive_more::TryInto)]
+#[derive(Debug, Clone, thiserror::Error, derive_more::TryInto)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub enum InstallSnapshotError<C: RaftTypeConfig> {
     #[error(transparent)]
     SnapshotMismatch(#[from] SnapshotMismatch),
@@ -73,7 +75,8 @@ pub enum InstallSnapshotError<C: RaftTypeConfig> {
 }
 
 /// An error related to a is_leader request.
-#[derive(Debug, Clone, Serialize, Deserialize, thiserror::Error, derive_more::TryInto)]
+#[derive(Debug, Clone, thiserror::Error, derive_more::TryInto)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub enum CheckIsLeaderError<C: RaftTypeConfig> {
     #[error(transparent)]
     ForwardToLeader(#[from] ForwardToLeader<C>),
@@ -86,7 +89,8 @@ pub enum CheckIsLeaderError<C: RaftTypeConfig> {
 }
 
 /// An error related to a client write request.
-#[derive(Debug, Clone, Serialize, Deserialize, thiserror::Error, derive_more::TryInto)]
+#[derive(Debug, Clone, thiserror::Error, derive_more::TryInto)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub enum ClientWriteError<C: RaftTypeConfig> {
     #[error(transparent)]
     ForwardToLeader(#[from] ForwardToLeader<C>),
@@ -100,7 +104,8 @@ pub enum ClientWriteError<C: RaftTypeConfig> {
 }
 
 /// The set of errors which may take place when requesting to propose a config change.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub enum ChangeMembershipError<C: RaftTypeConfig> {
     #[error(transparent)]
     InProgress(#[from] InProgress<C>),
@@ -119,7 +124,8 @@ pub enum ChangeMembershipError<C: RaftTypeConfig> {
     NodeNotInCluster(#[from] NodeIdNotInNodes<C>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub enum AddLearnerError<C: RaftTypeConfig> {
     #[error(transparent)]
     ForwardToLeader(#[from] ForwardToLeader<C>),
@@ -146,7 +152,8 @@ impl<C: RaftTypeConfig> TryFrom<AddLearnerError<C>> for ForwardToLeader<C> {
 }
 
 /// The set of errors which may take place when initializing a pristine Raft node.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub enum InitializeError<C: RaftTypeConfig> {
     /// The requested action is not allowed due to the Raft node's current state.
     #[error("the requested action is not allowed due to the Raft node's current state")]
@@ -230,7 +237,8 @@ pub enum ReplicationError<C: RaftTypeConfig> {
     RemoteError(#[from] RemoteError<C, AppendEntriesError<C>>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub enum RPCError<C: RaftTypeConfig, T: Error> {
     #[error(transparent)]
     NodeNotFound(#[from] NodeNotFound<C>),
@@ -245,7 +253,8 @@ pub enum RPCError<C: RaftTypeConfig, T: Error> {
     RemoteError(#[from] RemoteError<C, T>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 #[error("error occur on remote peer {target}: {source}")]
 pub struct RemoteError<C: RaftTypeConfig, T: std::error::Error> {
     pub target: C::NodeId,
@@ -270,21 +279,24 @@ impl<C: RaftTypeConfig, T: std::error::Error> RemoteError<C, T> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 #[error("seen a higher vote: {higher} GT mine: {mine}")]
 pub struct HigherVote<C: RaftTypeConfig> {
     pub higher: Vote<C>,
     pub mine: Vote<C>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 #[error("leader committed index {committed_index} advances target log index {target_index} too many")]
 pub struct CommittedAdvanceTooMany {
     pub committed_index: u64,
     pub target_index: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 #[error(transparent)]
 pub struct NetworkError {
     #[from]
@@ -299,7 +311,8 @@ impl NetworkError {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 #[error("timeout after {timeout:?} when {action} {id}->{target}")]
 pub struct Timeout<C: RaftTypeConfig> {
     pub action: RPCTypes,
@@ -308,47 +321,54 @@ pub struct Timeout<C: RaftTypeConfig> {
     pub timeout: Duration,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 #[error("store has no log at: {index:?}, last purged: {last_purged_log_id:?}")]
 pub struct LackEntry<C: RaftTypeConfig> {
     pub index: Option<u64>,
     pub last_purged_log_id: Option<LogId<C::NodeId>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 #[error("has to forward request to: {leader_id:?}, {leader_node:?}")]
 pub struct ForwardToLeader<C: RaftTypeConfig> {
     pub leader_id: Option<C::NodeId>,
     pub leader_node: Option<Node>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 #[error("snapshot segment id mismatch, expect: {expect}, got: {got}")]
 pub struct SnapshotMismatch {
     pub expect: SnapshotSegmentId,
     pub got: SnapshotSegmentId,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 #[error("not enough for a quorum, cluster: {cluster}, got: {got:?}")]
 pub struct QuorumNotEnough<C: RaftTypeConfig> {
     pub cluster: String,
     pub got: BTreeSet<C::NodeId>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 #[error("the cluster is already undergoing a configuration change at log {membership_log_id}")]
 pub struct InProgress<C: RaftTypeConfig> {
     pub membership_log_id: LogId<C::NodeId>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 #[error("to add a member {node_id} first need to add it as learner")]
 pub struct LearnerNotFound<C: RaftTypeConfig> {
     pub node_id: C::NodeId,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 #[error("replication to learner {node_id} is lagging {distance}, matched: {matched:?}, can not add as member")]
 pub struct LearnerIsLagging<C: RaftTypeConfig> {
     pub node_id: C::NodeId,
@@ -356,24 +376,28 @@ pub struct LearnerIsLagging<C: RaftTypeConfig> {
     pub distance: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 #[error("node {node_id} not found in cluster: {node_ids:?}")]
 pub struct NodeIdNotInNodes<C: RaftTypeConfig> {
     pub node_id: C::NodeId,
     pub node_ids: BTreeSet<C::NodeId>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 #[error("new membership can not be empty")]
 pub struct EmptyMembership {}
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 #[error("node not found: {node_id}, source: {source}")]
 pub struct NodeNotFound<C: RaftTypeConfig> {
     pub node_id: C::NodeId,
     pub source: AnyError,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 #[error("infallible")]
 pub enum Infallible {}

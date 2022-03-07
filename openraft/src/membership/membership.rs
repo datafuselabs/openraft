@@ -5,8 +5,6 @@ use std::collections::BTreeSet;
 
 use maplit::btreemap;
 use maplit::btreeset;
-use serde::Deserialize;
-use serde::Serialize;
 
 use crate::error::NodeIdNotInNodes;
 use crate::membership::quorum;
@@ -14,7 +12,8 @@ use crate::MessageSummary;
 use crate::Node;
 use crate::RaftTypeConfig;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub enum EitherNodesOrIds<C: RaftTypeConfig> {
     Nodes(BTreeMap<C::NodeId, Node>),
     NodeIds(BTreeSet<C::NodeId>),
@@ -51,7 +50,8 @@ impl<C: RaftTypeConfig> EitherNodesOrIds<C> {
 ///
 /// It could be a joint of one, two or more configs, i.e., a quorum is a node set that is superset of a majority of
 /// every config.
-#[derive(Clone, Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Default, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub struct Membership<C: RaftTypeConfig> {
     /// Learners set
     learners: BTreeSet<C::NodeId>,
