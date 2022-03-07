@@ -6,8 +6,6 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use futures::future::FutureExt;
-use serde::Deserialize;
-use serde::Serialize;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncSeek;
@@ -52,8 +50,9 @@ use crate::RaftTypeConfig;
 use crate::ToStorageResult;
 use crate::Vote;
 
-#[derive(Default, Debug, Serialize, Deserialize)]
-#[serde(bound = "")]
+#[derive(Default, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(bound = ""))]
 pub struct ReplicationMetrics<NID: NodeId> {
     pub(crate) matched_leader_id: LeaderId<NID>,
     pub(crate) matched_index: AtomicU64,

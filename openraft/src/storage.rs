@@ -4,8 +4,6 @@ use std::fmt::Debug;
 use std::ops::RangeBounds;
 
 use async_trait::async_trait;
-use serde::Deserialize;
-use serde::Serialize;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncSeek;
 use tokio::io::AsyncWrite;
@@ -22,7 +20,8 @@ use crate::RaftTypeConfig;
 use crate::StorageError;
 use crate::Vote;
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub struct SnapshotMeta<C: RaftTypeConfig> {
     // Log entries upto which this snapshot includes, inclusive.
     pub last_log_id: LogId<C::NodeId>,
