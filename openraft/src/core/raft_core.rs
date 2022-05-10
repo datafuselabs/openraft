@@ -386,8 +386,15 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
     }
 
     /// Update the node's current membership config & save hard state.
+    /// TODO(xp): this method is only called by a follower or learner.
     #[tracing::instrument(level = "trace", skip(self))]
-    pub(crate) fn update_membership(&mut self, cfg: EffectiveMembership<C::NodeId>) {
+    pub(crate) fn update_membership(&mut self, memberships: Vec<EffectiveMembership<C::NodeId>>) {
+        assert!(!memberships.is_empty());
+        assert!(memberships.len() <= 2);
+
+        let st = &mut self.engine.state;
+        st.committed_membership = Arc::new(memberships.first().unwrap().clone());
+
         // If the given config does not contain this node's ID, it means one of the following:
         //
         // - the node is currently a learner and is replicating an old config to which it has
@@ -395,9 +402,9 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
         // - the node has been removed from the cluster. The parent application can observe the
         // transition to the learner state as a signal for when it is safe to shutdown a node
         // being removed.
-        self.engine.state.effective_membership = Arc::new(cfg);
-        if self.engine.state.effective_membership.membership.is_member(&self.id) {
-            if self.engine.state.server_state == ServerState::Learner {
+        st.effective_membership = Arc::new(memberships.last().unwrap().clone());
+        if st.effective_membership.membership.is_member(&self.id) {
+            if st.server_state == ServerState::Learner {
                 // The node is a Learner and the new config has it configured as a normal member.
                 // Transition to follower.
                 self.set_target_state(ServerState::Follower);

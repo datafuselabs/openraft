@@ -76,9 +76,9 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
 
         // TODO(xp): get_membership() should have a defensive check to ensure it always returns Some() if node is
         //           initialized. Because a node always commit a membership log as the first log entry.
-        let membership = self.storage.get_membership().await?;
+        let memberships = self.storage.get_membership().await?;
 
-        self.update_membership(membership);
+        self.update_membership(memberships);
 
         tracing::debug!("Done update membership");
 
@@ -287,28 +287,34 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
     ///
     /// Configuration changes are also detected and applied here. See `configuration changes`
     /// in the raft-essentials.md in this repo.
+    /// TODO(xp): this method is only called by a follower or learner.
     #[tracing::instrument(level = "trace", skip(self, entries), fields(entries=%entries.summary()))]
     async fn append_log_entries(&mut self, entries: &[Entry<C>]) -> Result<(), StorageError<C::NodeId>> {
         if entries.is_empty() {
             return Ok(());
         }
 
-        // Check the given entries for any config changes and take the most recent.
-        let last_conf_change = entries
-            .iter()
-            .filter_map(|ent| match &ent.payload {
-                EntryPayload::Membership(conf) => Some(EffectiveMembership::new(Some(ent.log_id), conf.clone())),
-                _ => None,
-            })
-            .last();
+        let mut memberships = vec![];
+        for ent in entries.iter() {
+            if let EntryPayload::Membership(conf) = &ent.payload {
+                if memberships.len() == 2 {
+                    memberships.remove(0);
+                }
+                memberships.push(EffectiveMembership::new(Some(ent.log_id), conf.clone()));
+            };
+        }
 
-        // TODO(xp): only when last_conf_change is newer than current one.
-        //           For now it is guaranteed by `delete_logs()`, for it updates membership config when delete logs.
-        //           and `skip_matching_entries()`, for it does not re-append existent log entries.
-        //           This task should be done by StorageAdaptor.
-        if let Some(conf) = last_conf_change {
-            tracing::debug!({membership=?conf}, "applying new membership config received from leader");
-            self.update_membership(conf);
+        if !memberships.is_empty() {
+            tracing::debug!(memberships=?memberships, "applying new membership configs received from leader");
+
+            let st = &self.engine.state;
+            if memberships.len() == 1 {
+                let new_memberships = vec![st.effective_membership.as_ref().clone(), memberships[0].clone()];
+                self.update_membership(new_memberships);
+            } else {
+                // len() == 2
+                self.update_membership(memberships);
+            }
         };
 
         // Replicate entries to log (same as append, but in follower mode).

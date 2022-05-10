@@ -6,6 +6,7 @@ use anyhow::Result;
 use maplit::btreeset;
 use openraft::raft::AppendEntriesRequest;
 use openraft::Config;
+use openraft::EffectiveMembership;
 use openraft::Entry;
 use openraft::EntryPayload;
 use openraft::LeaderId;
@@ -101,7 +102,10 @@ async fn snapshot_overrides_membership() -> Result<()> {
             {
                 let m = sto.get_membership().await?;
 
-                assert_eq!(Membership::new(vec![btreeset! {2,3}], None), m.membership);
+                println!("{:?}", m);
+                assert_eq!(2, m.len());
+                assert_eq!(EffectiveMembership::default(), m[0]);
+                assert_eq!(Membership::new(vec![btreeset! {2,3}], None), m[1].membership);
             }
         }
 
@@ -131,9 +135,10 @@ async fn snapshot_overrides_membership() -> Result<()> {
 
             let m = sto.get_membership().await?;
 
+            assert_eq!(1, m.len());
             assert_eq!(
                 Membership::new(vec![btreeset! {0}], Some(btreeset! {1})),
-                m.membership,
+                m[0].membership,
                 "membership should be overridden by the snapshot"
             );
         }

@@ -37,6 +37,9 @@ pub struct RaftState<NID: NodeId> {
     /// The latest cluster membership configuration found, in log or in state machine.
     pub effective_membership: Arc<EffectiveMembership<NID>>,
 
+    /// The last known committed membership configuration found, in log or in state machine.
+    pub committed_membership: Arc<EffectiveMembership<NID>>,
+
     // --
     // -- volatile fields: they are not persisted.
     // --

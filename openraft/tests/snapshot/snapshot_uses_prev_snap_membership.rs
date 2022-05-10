@@ -75,9 +75,10 @@ async fn snapshot_uses_prev_snap_membership() -> Result<()> {
         }
         let m = sto0.get_membership().await?;
 
+        assert_eq!(1, m.len());
         assert_eq!(
             Membership::new(vec![btreeset! {0,1}], None),
-            m.membership,
+            m[0].membership,
             "membership "
         );
 
@@ -123,9 +124,10 @@ async fn snapshot_uses_prev_snap_membership() -> Result<()> {
         }
         let m = sto0.get_membership().await?;
 
+        assert_eq!(1, m.len());
         assert_eq!(
             Membership::new(vec![btreeset! {0,1}], None),
-            m.membership,
+            m[0].membership,
             "membership "
         );
     }
