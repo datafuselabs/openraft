@@ -27,15 +27,14 @@ use openraft::StateMachineChanges;
 use openraft::StorageError;
 use openraft::StorageIOError;
 use openraft::Vote;
-use serde::Deserialize;
-use serde::Serialize;
 use tokio::sync::RwLock;
 
 /// The application data request type which the `MemStore` works with.
 ///
 /// Conceptually, for demo purposes, this represents an update to a client's status info,
 /// returning the previously recorded status.
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub struct ClientRequest {
     /// The ID of the client which has sent the request.
     pub client: String,
@@ -65,7 +64,8 @@ impl IntoMemClientRequest<ClientRequest> for ClientRequest {
 }
 
 /// The application data response type which the `MemStore` works with.
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub struct ClientResponse(Option<String>);
 
 pub type MemNodeId = u64;
@@ -85,7 +85,8 @@ pub struct MemStoreSnapshot {
 }
 
 /// The state machine of the `MemStore`.
-#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+#[derive(Debug, Default, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub struct MemStoreStateMachine {
     pub last_applied_log: Option<LogId<MemNodeId>>,
 
@@ -184,6 +185,7 @@ impl RaftLogReader<Config> for Arc<MemStore> {
     }
 }
 
+#[cfg(feature = "serde")]
 #[async_trait]
 impl RaftSnapshotBuilder<Config, Cursor<Vec<u8>>> for Arc<MemStore> {
     #[tracing::instrument(level = "trace", skip(self))]
@@ -247,6 +249,7 @@ impl RaftSnapshotBuilder<Config, Cursor<Vec<u8>>> for Arc<MemStore> {
     }
 }
 
+#[cfg(feature = "serde")]
 #[async_trait]
 impl RaftStorage<Config> for Arc<MemStore> {
     type SnapshotData = Cursor<Vec<u8>>;
@@ -359,6 +362,7 @@ impl RaftStorage<Config> for Arc<MemStore> {
         Ok(Box::new(Cursor::new(Vec::new())))
     }
 
+    #[cfg(feature = "serde")]
     #[tracing::instrument(level = "trace", skip(self, snapshot))]
     async fn install_snapshot(
         &mut self,
@@ -421,6 +425,7 @@ impl RaftStorage<Config> for Arc<MemStore> {
     }
 
     type LogReader = Self;
+    #[cfg(feature = "serde")]
     type SnapshotBuilder = Self;
 
     async fn get_log_reader(&mut self) -> Self::LogReader {

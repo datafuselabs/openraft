@@ -25,6 +25,7 @@ use crate::MemStore;
 ///     Suite::test_all(MemStoreBuilder {})
 /// }
 /// ```
+#[cfg(feature = "serde")]
 #[test]
 pub fn test_mem_store() -> Result<(), StorageError<MemNodeId>> {
     Suite::test_all(MemStore::new_async)?;
