@@ -77,22 +77,6 @@ impl<C: RaftTypeConfig> MessageSummary for Entry<C> {
     }
 }
 
-impl<C: RaftTypeConfig> MessageSummary for Option<Entry<C>> {
-    fn summary(&self) -> String {
-        match self {
-            None => "None".to_string(),
-            Some(x) => format!("Some({})", x.summary()),
-        }
-    }
-}
-
-impl<C: RaftTypeConfig> MessageSummary for &[Entry<C>] {
-    fn summary(&self) -> String {
-        let entry_refs: Vec<_> = self.iter().collect();
-        entry_refs.as_slice().summary()
-    }
-}
-
 impl<C: RaftTypeConfig> MessageSummary for &[&Entry<C>] {
     fn summary(&self) -> String {
         if self.is_empty() {
@@ -138,6 +122,15 @@ impl<'p, C: RaftTypeConfig> MessageSummary for EntryRef<'p, C> {
     }
 }
 
+impl<C: RaftTypeConfig> From<&Entry<C>> for Entry<C> {
+    fn from(er: &Entry<C>) -> Self {
+        Entry {
+            log_id: er.log_id,
+            payload: er.payload.clone(),
+        }
+    }
+}
+
 impl<'p, C: RaftTypeConfig> From<&EntryRef<'p, C>> for Entry<C> {
     fn from(er: &EntryRef<'p, C>) -> Self {
         Entry {
@@ -146,6 +139,7 @@ impl<'p, C: RaftTypeConfig> From<&EntryRef<'p, C>> for Entry<C> {
         }
     }
 }
+
 impl<'p, C: RaftTypeConfig> EntryRef<'p, C> {
     pub fn new(payload: &'p EntryPayload<C>) -> Self {
         Self {
