@@ -20,6 +20,7 @@ anyerror = { version = "0.1.6" }
 # Leave it for debug
 # anyerror = { git = "https://github.com/drmingdrmer/anyerror", branch = "ci",  features = ["anyhow"]}
 async-trait = "0.1.36"
+async-lock = "2.5.0"
 byte-unit = "4.0.12"
 bytes = "1.0"
 derive_more = { version="0.99.9" }

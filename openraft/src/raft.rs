@@ -116,7 +116,7 @@ struct RaftInner<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>>
     marker_s: std::marker::PhantomData<S>,
 
     /// The error that cause RaftCore to quit.
-    core_error: std::sync::Mutex<Option<Fatal<C::NodeId>>>,
+    core_result: async_lock::Mutex<Result<(), Fatal<C::NodeId>>>,
 }
 
 /// The Raft API.
@@ -188,7 +188,7 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> Raft<C, N, 
             marker_n: std::marker::PhantomData,
             marker_s: std::marker::PhantomData,
 
-            core_error: std::sync::Mutex::new(None),
+            core_result: async_lock::Mutex::new(Ok(())),
         };
         Self { inner: Arc::new(inner) }
     }
@@ -477,9 +477,12 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> Raft<C, N, 
     async fn get_core_error(&self) -> Fatal<C::NodeId> {
         // If there is an error recorded, return it.
         {
-            let guard = self.inner.core_error.lock().unwrap();
-            if let Some(x) = &*guard {
-                return x.clone();
+            let guard = self.inner.core_result.lock().await;
+            match &*guard {
+                Ok(()) => {}
+                Err(err) => {
+                    return err.clone();
+                }
             }
         }
 
@@ -488,25 +491,22 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> Raft<C, N, 
             tracing::error!(res=?res, "RaftCore exited");
 
             if let Err(err) = res {
-                let mut guard = self.inner.core_error.lock().unwrap();
-
-                if err.is_panic() {
-                    *guard = Some(Fatal::Panicked);
-                    return Fatal::Panicked;
-                } else if err.is_cancelled() {
-                    *guard = Some(Fatal::Stopped);
-                    return Fatal::Stopped;
+                {
+                    let mut guard = self.inner.core_result.lock().await;
+                    match &mut *guard {
+                        Ok(()) => {}
+                        Err(e) => {
+                            if err.is_panic() {
+                                *e = Fatal::Panicked;
+                                return Fatal::Panicked;
+                            } else if err.is_cancelled() {
+                                *e = Fatal::Stopped;
+                                return Fatal::Stopped;
+                            }
+                        }
+                    }
                 }
             }
-        }
-
-        // RaftCore encountered an un-handleable error
-        let last_err = self.inner.rx_metrics.borrow().running_state.clone();
-        if let Err(err) = last_err {
-            let mut guard = self.inner.core_error.lock().unwrap();
-            *guard = Some(err.clone());
-
-            return err;
         }
 
         unreachable!("no RaftCore error found")
@@ -570,7 +570,11 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> Raft<C, N, 
             let _ = tx.send(());
         }
         if let Some(handle) = self.inner.raft_handle.lock().await.take() {
-            let _ = handle.await?;
+            {
+                let mut guard = self.inner.core_result.lock().await;
+                let _ = handle.await?;
+                *guard = Ok(());
+            } // Atomic update core error.
         }
         Ok(())
     }
