@@ -567,9 +567,11 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
         Ent: RaftLogId<C::NodeId> + Sync + Send + 'e,
         &'e Ent: Into<Entry<C>>,
     {
-        tracing::debug!("run command: start...");
-        for c in self.engine.commands.iter() {
-            tracing::debug!("run command: {:?}", c);
+        if tracing::enabled!(Level::DEBUG) {
+            tracing::debug!("run command: start...");
+            for c in self.engine.commands.iter() {
+                tracing::debug!("run command: {:?}", c);
+            }
         }
 
         let mut curr = 0;
