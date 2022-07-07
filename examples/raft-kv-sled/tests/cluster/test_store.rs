@@ -40,5 +40,5 @@ async fn test_store_factory() -> std::sync::Arc<ExampleStore> {
     let db: sled::Db = sled::open(db_dir)
         .expect(&format!("could not open: {:?}", db_dir.to_str()));
 
-    ExampleStore::new(db).await
+    ExampleStore::new(std::sync::Arc::new(db)).await
 }

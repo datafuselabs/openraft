@@ -662,16 +662,15 @@ impl RaftStorage<ExampleTypeConfig> for Arc<ExampleStore> {
     }
 }
 impl ExampleStore {
-    pub async fn new(db: sled::Db) -> Arc<ExampleStore> {
+    pub async fn new(db: Arc<sled::Db>) -> Arc<ExampleStore> {
 
         let _store = store(&db);
         let _state_machine = state_machine(&db);
         let _data = data(&db);
         let _logs = logs(&db);
 
-        let db_arc = Arc::new(db);
-        let state_machine = RwLock::new(ExampleStateMachine::new(db_arc.clone()));
-        Arc::new(ExampleStore { db: db_arc, state_machine })
+        let state_machine = RwLock::new(ExampleStateMachine::new(db.clone()));
+        Arc::new(ExampleStore { db: db, state_machine })
     }
 }
 

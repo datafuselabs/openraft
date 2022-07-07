@@ -46,7 +46,7 @@ pub async fn start_example_raft_node(
 
     let db: sled::Db = sled::open(db_dir)
         .expect(&format!("could not open: {:?}", db_dir.to_str()));
-    let store = ExampleStore::new(db).await;
+    let store = ExampleStore::new(std::sync::Arc::new(db)).await;
 
     // Create the network layer that will connect and communicate the raft instances and
     // will be used in conjunction with the store created above.
