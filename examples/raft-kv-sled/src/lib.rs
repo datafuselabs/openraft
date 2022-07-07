@@ -39,7 +39,14 @@ pub async fn start_example_raft_node(
     let config = Arc::new(Config::default().validate().unwrap());
 
     // Create a instance of where the Raft data will be stored.
-    let store = ExampleStore::new(&dir).await;
+    let db_dir = std::path::Path::new(dir);
+    if !db_dir.exists() {
+        std::fs::create_dir_all(db_dir).expect(&format!("could not create: {:?}", db_dir.to_str()))
+    }
+
+    let db: sled::Db = sled::open(db_dir)
+        .expect(&format!("could not open: {:?}", db_dir.to_str()));
+    let store = ExampleStore::new(db).await;
 
     // Create the network layer that will connect and communicate the raft instances and
     // will be used in conjunction with the store created above.

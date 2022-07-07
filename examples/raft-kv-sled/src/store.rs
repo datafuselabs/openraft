@@ -3,8 +3,7 @@ use std::error::Error;
 use std::fmt::Debug;
 use std::io::Cursor;
 use std::ops::RangeBounds;
-use std::path::Path;
-use std::sync::{Arc};
+use std::sync::Arc;
 
 use byteorder::ByteOrder;
 use byteorder::BigEndian;
@@ -663,15 +662,7 @@ impl RaftStorage<ExampleTypeConfig> for Arc<ExampleStore> {
     }
 }
 impl ExampleStore {
-    pub async fn new(db_dir_str: &str) -> Arc<ExampleStore> {
-
-        let db_dir = Path::new(db_dir_str);
-        if !db_dir.exists() {
-            std::fs::create_dir_all(db_dir).expect(&format!("could not create: {:?}", db_dir.to_str()))
-        }
-
-        let db: sled::Db = sled::open(db_dir)
-            .expect(&format!("could not open: {:?}", db_dir.to_str()));
+    pub async fn new(db: sled::Db) -> Arc<ExampleStore> {
 
         let _store = store(&db);
         let _state_machine = state_machine(&db);

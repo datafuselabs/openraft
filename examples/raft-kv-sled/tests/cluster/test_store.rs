@@ -30,6 +30,15 @@ pub fn test_raft_store() -> Result<(), openraft::StorageError<ExampleNodeId>> {
 async fn test_store_factory() -> std::sync::Arc<ExampleStore> {
     let pid = std::process::id();
     let old_count = GLOBAL_TEST_COUNT.fetch_add(1, Ordering::SeqCst);
-    let dir = format!("{}pid{}/num{}/", TEST_DATA_DIR, pid, old_count);
-    ExampleStore::new(&dir).await
+    let db_dir_str = format!("{}pid{}/num{}/", TEST_DATA_DIR, pid, old_count);
+
+    let db_dir = std::path::Path::new(&db_dir_str);
+    if !db_dir.exists() {
+        std::fs::create_dir_all(db_dir).expect(&format!("could not create: {:?}", db_dir.to_str()))
+    }
+
+    let db: sled::Db = sled::open(db_dir)
+        .expect(&format!("could not open: {:?}", db_dir.to_str()));
+
+    ExampleStore::new(db).await
 }
