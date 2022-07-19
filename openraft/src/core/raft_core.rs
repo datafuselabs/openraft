@@ -157,8 +157,8 @@ pub struct RaftCore<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<
 
     pub(crate) rx_internal: mpsc::Receiver<InternalMessage<C::NodeId>>,
 
-    pub(crate) tx_api: mpsc::UnboundedSender<(RaftMsg<C, N, S>, Span)>,
-    pub(crate) rx_api: mpsc::UnboundedReceiver<(RaftMsg<C, N, S>, Span)>,
+    pub(crate) tx_api: mpsc::UnboundedSender<RaftMsg<C, N, S>>,
+    pub(crate) rx_api: mpsc::UnboundedReceiver<RaftMsg<C, N, S>>,
 
     tx_metrics: watch::Sender<RaftMetrics<C::NodeId>>,
 
@@ -173,8 +173,8 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
         config: Arc<Config>,
         network: N,
         storage: S,
-        tx_api: mpsc::UnboundedSender<(RaftMsg<C, N, S>, Span)>,
-        rx_api: mpsc::UnboundedReceiver<(RaftMsg<C, N, S>, Span)>,
+        tx_api: mpsc::UnboundedSender<RaftMsg<C, N, S>>,
+        rx_api: mpsc::UnboundedReceiver<RaftMsg<C, N, S>>,
         tx_metrics: watch::Sender<RaftMetrics<C::NodeId>>,
         rx_shutdown: oneshot::Receiver<()>,
     ) -> JoinHandle<Result<(), Fatal<C::NodeId>>> {
@@ -431,6 +431,8 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
 
             // If we receive a response with a greater term, then revert to follower and abort this request.
             if let AppendEntriesResponse::HigherVote(vote) = data {
+                // TODO: there is no guarantee the response vote is greater than local. Because local vote may already
+                //       changed.
                 assert!(vote > self.engine.state.vote);
                 self.engine.state.vote = vote;
                 // TODO(xp): deal with storage error
@@ -759,7 +761,7 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
         }
     }
 
-    /// Handle the admin `init_with_config` command.
+    /// Handle the admin command `initialize`.
     ///
     /// It is allowed to initialize only when `last_log_id.is_none()` and `vote==(0,0)`.
     /// See: [Conditions for initialization](https://datafuselabs.github.io/openraft/cluster-formation.html#conditions-for-initialization)
@@ -1248,8 +1250,8 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
             self.flush_metrics();
 
             tokio::select! {
-                Some((msg,span)) = self.rx_api.recv() => {
-                    self.handle_api_msg(msg).instrument(span).await?;
+                Some(msg) = self.rx_api.recv() => {
+                    self.handle_api_msg(msg).await?;
                 },
 
                 Some(internal_msg) = self.rx_internal.recv() => {
@@ -1295,8 +1297,8 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
                         break;
                     },
 
-                    Some((msg, span)) = self.rx_api.recv() => {
-                        self.handle_api_msg(msg).instrument(span).await?;
+                    Some(msg) = self.rx_api.recv() => {
+                        self.handle_api_msg(msg).await?;
                     },
 
                     Some(internal_msg) = self.rx_internal.recv() => {
@@ -1322,8 +1324,8 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
             self.flush_metrics();
 
             tokio::select! {
-                Some((msg, span)) = self.rx_api.recv() => {
-                    self.handle_api_msg(msg).instrument(span).await?;
+                Some(msg) = self.rx_api.recv() => {
+                    self.handle_api_msg(msg).await?;
                 },
 
                 Some(internal_msg) = self.rx_internal.recv() => self.handle_internal_msg(internal_msg).await?,
@@ -1356,7 +1358,7 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
 
                     match res {
                         Ok(resp) => {
-                            let _ = tx.send((RaftMsg::VoteResponse { target, resp, vote }, Span::current()));
+                            let _ = tx.send(RaftMsg::VoteResponse { target, resp, vote });
                         }
                         Err(err) => tracing::error!({error=%err, target=display(target)}, "while requesting vote"),
                     }
@@ -1543,12 +1545,13 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
     #[tracing::instrument(level = "trace", skip(self))]
     async fn handle_revert_to_follower(
         &mut self,
-        _: C::NodeId,
+        _target: C::NodeId,
         vote: Vote<C::NodeId>,
     ) -> Result<(), StorageError<C::NodeId>> {
         if vote > self.engine.state.vote {
             self.engine.state.vote = vote;
             self.save_vote().await?;
+            // TODO: when switching to Follower, the next election time has to be set.
             self.set_target_state(ServerState::Follower);
         }
         Ok(())
