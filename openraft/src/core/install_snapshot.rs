@@ -260,6 +260,7 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
 
         // A local log that is <= last_applied may be inconsistent with the leader.
         // It has to purge all of them to prevent these log form being replicated, when this node becomes leader.
+        self.engine.update_snapshot_last_log(Some(last_applied));
         self.engine.purge_log(last_applied);
         self.run_engine_commands::<Entry<C>>(&[]).await?;
 
