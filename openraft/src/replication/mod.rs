@@ -4,9 +4,7 @@ use std::io::SeekFrom;
 use std::sync::Arc;
 
 use futures::future::FutureExt;
-use tokio::io::AsyncRead;
 use tokio::io::AsyncReadExt;
-use tokio::io::AsyncSeek;
 use tokio::io::AsyncSeekExt;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -15,7 +13,7 @@ use tokio::time::interval;
 use tokio::time::timeout;
 use tokio::time::Duration;
 use tokio::time::Interval;
-use tracing::Span;
+use tracing_futures::Instrument;
 
 use crate::config::Config;
 use crate::config::SnapshotPolicy;
@@ -29,6 +27,7 @@ use crate::error::Timeout;
 use crate::raft::AppendEntriesRequest;
 use crate::raft::AppendEntriesResponse;
 use crate::raft::InstallSnapshotRequest;
+use crate::raft::RaftMsg;
 use crate::raft_types::LogIdOptionExt;
 use crate::raft_types::LogIndexOptionExt;
 use crate::storage::RaftLogReader;
@@ -47,7 +46,7 @@ use crate::RaftTypeConfig;
 use crate::ToStorageResult;
 use crate::Vote;
 
-/// The public handle to a spawned replication stream.
+/// The handle to a spawned replication stream.
 pub(crate) struct ReplicationStream<NID: NodeId> {
     /// The spawn handle the `ReplicationCore` task.
     pub handle: JoinHandle<()>,
@@ -56,45 +55,12 @@ pub(crate) struct ReplicationStream<NID: NodeId> {
     pub repl_tx: mpsc::UnboundedSender<UpdateReplication<NID>>,
 }
 
-impl<NID: NodeId> ReplicationStream<NID> {
-    /// Create a new replication stream for the target peer.
-    #[allow(clippy::type_complexity)]
-    pub(crate) fn new<C, N, S>(
-        target: NID,
-        target_node: Option<Node>,
-        vote: Vote<NID>,
-        config: Arc<Config>,
-        last_log: Option<LogId<NID>>,
-        committed: Option<LogId<NID>>,
-        network: N::Network,
-        log_reader: S::LogReader,
-        replication_tx: mpsc::UnboundedSender<(ReplicaEvent<NID, S::SnapshotData>, Span)>,
-    ) -> Self
-    where
-        C: RaftTypeConfig<NodeId = NID>,
-        N: RaftNetworkFactory<C>,
-        S: RaftStorage<C>,
-    {
-        ReplicationCore::<C, N, S>::spawn(
-            target,
-            target_node,
-            vote,
-            config,
-            last_log,
-            committed,
-            network,
-            log_reader,
-            replication_tx,
-        )
-    }
-}
-
 /// A task responsible for sending replication events to a target follower in the Raft cluster.
 ///
 /// NOTE: we do not stack replication requests to targets because this could result in
 /// out-of-order delivery. We always buffer until we receive a success response, then send the
 /// next payload from the buffer.
-struct ReplicationCore<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> {
+pub(crate) struct ReplicationCore<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> {
     /// The ID of the target Raft node which replication events are to be sent to.
     target: C::NodeId,
 
@@ -103,7 +69,7 @@ struct ReplicationCore<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStora
 
     /// A channel for sending events to the Raft node.
     #[allow(clippy::type_complexity)]
-    raft_core_tx: mpsc::UnboundedSender<(ReplicaEvent<C::NodeId, S::SnapshotData>, Span)>,
+    raft_core_tx: mpsc::UnboundedSender<RaftMsg<C, N, S>>,
 
     /// A channel for receiving events from the Raft node.
     repl_rx: mpsc::UnboundedReceiver<UpdateReplication<C::NodeId>>,
@@ -151,7 +117,8 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> Replication
     /// Spawn a new replication task for the target node.
     #[tracing::instrument(level = "trace", skip(config, network, log_reader, raft_core_tx))]
     #[allow(clippy::type_complexity)]
-    pub(self) fn spawn(
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn spawn(
         target: C::NodeId,
         target_node: Option<Node>,
         vote: Vote<C::NodeId>,
@@ -160,7 +127,8 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> Replication
         committed: Option<LogId<C::NodeId>>,
         network: N::Network,
         log_reader: S::LogReader,
-        raft_core_tx: mpsc::UnboundedSender<(ReplicaEvent<C::NodeId, S::SnapshotData>, Span)>,
+        raft_core_tx: mpsc::UnboundedSender<RaftMsg<C, N, S>>,
+        span: tracing::Span,
     ) -> ReplicationStream<C::NodeId> {
         // other component to ReplicationStream
         let (repl_tx, repl_rx) = mpsc::unbounded_channel();
@@ -184,7 +152,7 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> Replication
             need_to_replicate: true,
         };
 
-        let handle = tokio::spawn(this.main());
+        let handle = tokio::spawn(this.main().instrument(span));
 
         ReplicationStream { handle, repl_tx }
     }
@@ -217,13 +185,11 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> Replication
                     self.set_target_repl_state(TargetReplState::Shutdown);
                 }
                 ReplicationError::HigherVote(h) => {
-                    let _ = self.raft_core_tx.send((
-                        ReplicaEvent::RevertToFollower {
-                            target: self.target,
-                            vote: h.higher,
-                        },
-                        tracing::debug_span!("CH"),
-                    ));
+                    let _ = self.raft_core_tx.send(RaftMsg::RevertToFollower {
+                        target: self.target,
+                        new_vote: h.higher,
+                        vote: self.vote,
+                    });
                     return;
                 }
                 ReplicationError::LackEntry(lack_ent) => {
@@ -236,7 +202,7 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> Replication
                 }
                 ReplicationError::StorageError(_err) => {
                     self.set_target_repl_state(TargetReplState::Shutdown);
-                    let _ = self.raft_core_tx.send((ReplicaEvent::Shutdown, tracing::debug_span!("CH")));
+                    let _ = self.raft_core_tx.send(RaftMsg::ReplicationFatal);
                     return;
                 }
                 ReplicationError::NodeNotFound(err) => {
@@ -368,23 +334,19 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> Replication
                     let repl_err = match err {
                         RPCError::NodeNotFound(e) => ReplicationError::NodeNotFound(e),
                         RPCError::Timeout(e) => {
-                            let _ = self.raft_core_tx.send((
-                                ReplicaEvent::UpdateMatched {
-                                    target: self.target,
-                                    result: Err(e.to_string()),
-                                },
-                                tracing::debug_span!("CH"),
-                            ));
+                            let _ = self.raft_core_tx.send(RaftMsg::UpdateReplicationMatched {
+                                target: self.target,
+                                result: Err(e.to_string()),
+                                vote: self.vote,
+                            });
                             ReplicationError::Timeout(e)
                         }
                         RPCError::Network(e) => {
-                            let _ = self.raft_core_tx.send((
-                                ReplicaEvent::UpdateMatched {
-                                    target: self.target,
-                                    result: Err(e.to_string()),
-                                },
-                                tracing::debug_span!("CH"),
-                            ));
+                            let _ = self.raft_core_tx.send(RaftMsg::UpdateReplicationMatched {
+                                target: self.target,
+                                result: Err(e.to_string()),
+                                vote: self.vote,
+                            });
                             ReplicationError::Network(e)
                         }
                         RPCError::RemoteError(e) => ReplicationError::RemoteError(e),
@@ -395,13 +357,11 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> Replication
             Err(timeout_err) => {
                 tracing::warn!(error=%timeout_err, "timeout while sending AppendEntries RPC to target");
 
-                let _ = self.raft_core_tx.send((
-                    ReplicaEvent::UpdateMatched {
-                        target: self.target,
-                        result: Err(timeout_err.to_string()),
-                    },
-                    tracing::debug_span!("CH"),
-                ));
+                let _ = self.raft_core_tx.send(RaftMsg::UpdateReplicationMatched {
+                    target: self.target,
+                    result: Err(timeout_err.to_string()),
+                    vote: self.vote,
+                });
 
                 return Err(ReplicationError::Timeout(Timeout {
                     action: RPCTypes::AppendEntries,
@@ -484,15 +444,13 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> Replication
 
             tracing::debug!(target=%self.target, matched=?self.matched, "matched updated");
 
-            let _ = self.raft_core_tx.send((
-                ReplicaEvent::UpdateMatched {
-                    target: self.target,
-                    // `self.matched < new_matched` implies new_matched can not be None.
-                    // Thus unwrap is safe.
-                    result: Ok(self.matched.unwrap()),
-                },
-                tracing::debug_span!("CH"),
-            ));
+            let _ = self.raft_core_tx.send(RaftMsg::UpdateReplicationMatched {
+                target: self.target,
+                // `self.matched < new_matched` implies new_matched can not be None.
+                // Thus unwrap is safe.
+                result: Ok(self.matched.unwrap()),
+                vote: self.vote,
+            });
         }
     }
 
@@ -593,69 +551,6 @@ impl<NID: NodeId> MessageSummary<UpdateReplication<NID>> for UpdateReplication<N
             "UpdateReplication: last_log_id: {:?}, committed: {:?}",
             self.last_log_id, self.committed
         )
-    }
-}
-
-/// An event coming from a replication stream.
-pub(crate) enum ReplicaEvent<NID, S>
-where
-    NID: NodeId,
-    S: AsyncRead + AsyncSeek + Send + Unpin + 'static,
-{
-    /// An event from a replication stream which updates the target node's match index.
-    UpdateMatched {
-        /// The ID of the target node for which the match index is to be updated.
-        target: NID,
-
-        /// Either the last log id that has been successfully replicated to the target,
-        /// or an error in string.
-        result: Result<LogId<NID>, String>,
-    },
-
-    /// An event indicating that the Raft node needs to revert to follower state.
-    RevertToFollower {
-        /// The ID of the target node from which the new term was observed.
-        target: NID,
-
-        /// The new vote observed.
-        vote: Vote<NID>,
-    },
-
-    /// An event from a replication stream requesting snapshot info.
-    NeedsSnapshot {
-        target: NID,
-
-        /// The log id the caller requires the snapshot has to include.
-        must_include: Option<LogId<NID>>,
-
-        /// The response channel for delivering the snapshot data.
-        tx: oneshot::Sender<Snapshot<NID, S>>,
-    },
-
-    /// Some critical error has taken place, and Raft needs to shutdown.
-    Shutdown,
-}
-
-impl<NID: NodeId, S: AsyncRead + AsyncSeek + Send + Unpin + 'static> MessageSummary<ReplicaEvent<NID, S>>
-    for ReplicaEvent<NID, S>
-{
-    fn summary(&self) -> String {
-        match self {
-            ReplicaEvent::UpdateMatched { ref target, ref result } => {
-                format!("UpdateMatchIndex: target: {}, result: {:?}", target, result)
-            }
-            ReplicaEvent::RevertToFollower { ref target, ref vote } => {
-                format!("RevertToFollower: target: {}, vote: {}", target, vote)
-            }
-            ReplicaEvent::NeedsSnapshot {
-                ref target,
-                ref must_include,
-                ..
-            } => {
-                format!("NeedsSnapshot: target: {}, must_include: {:?}", target, must_include)
-            }
-            ReplicaEvent::Shutdown => "Shutdown".to_string(),
-        }
     }
 }
 
@@ -763,14 +658,12 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> Replication
 
             // TODO(xp): handle sending error. If channel is closed, quite replication by returning
             // ReplicationError::Closed.
-            let _ = self.raft_core_tx.send((
-                ReplicaEvent::NeedsSnapshot {
-                    target: self.target,
-                    must_include: snapshot_must_include,
-                    tx,
-                },
-                tracing::debug_span!("CH"),
-            ));
+            let _ = self.raft_core_tx.send(RaftMsg::NeedsSnapshot {
+                target: self.target,
+                must_include: snapshot_must_include,
+                tx,
+                vote: self.vote,
+            });
 
             let mut waiting_for_snapshot = true;
 

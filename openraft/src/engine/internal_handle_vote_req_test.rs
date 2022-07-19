@@ -7,7 +7,6 @@ use crate::engine::Command;
 use crate::engine::Engine;
 use crate::engine::LogIdList;
 use crate::error::RejectVoteRequest;
-use crate::leader::Leader;
 use crate::EffectiveMembership;
 use crate::LeaderId;
 use crate::LogId;
@@ -31,9 +30,7 @@ fn eng() -> Engine<u64> {
     eng.state.vote = Vote::new(2, 1);
     eng.state.server_state = ServerState::Candidate;
     eng.state.membership_state.effective = Arc::new(EffectiveMembership::new(Some(log_id(1, 1)), m01()));
-    eng.state.leader = Some(Leader {
-        vote_granted_by: Default::default(),
-    });
+    eng.state.new_leader();
     eng
 }
 
@@ -111,7 +108,7 @@ fn test_internal_handle_vote_req_committed_vote() -> anyhow::Result<()> {
     assert_eq!(
         vec![
             //
-            Command::InstallElectionTimer {},
+            Command::InstallElectionTimer { can_be_leader: false },
             Command::RejectElection {},
             Command::SaveVote {
                 vote: Vote::new_committed(3, 2)
@@ -152,7 +149,7 @@ fn test_internal_handle_vote_req_granted_equal_vote_and_last_log_id() -> anyhow:
     assert_eq!(
         vec![
             //
-            Command::InstallElectionTimer {},
+            Command::InstallElectionTimer { can_be_leader: true },
             Command::UpdateServerState {
                 server_state: ServerState::Follower
             }
@@ -187,7 +184,7 @@ fn test_internal_handle_vote_req_granted_greater_vote() -> anyhow::Result<()> {
 
     assert_eq!(
         vec![
-            Command::InstallElectionTimer {},
+            Command::InstallElectionTimer { can_be_leader: true },
             Command::SaveVote { vote: Vote::new(3, 1) },
             Command::UpdateServerState {
                 server_state: ServerState::Follower
@@ -215,7 +212,7 @@ fn test_internal_handle_vote_req_granted_follower_learner_does_not_emit_update_s
         assert_eq!(
             vec![
                 //
-                Command::InstallElectionTimer {},
+                Command::InstallElectionTimer { can_be_leader: true },
                 Command::SaveVote { vote: Vote::new(3, 1) },
             ],
             eng.commands

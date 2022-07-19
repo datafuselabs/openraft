@@ -51,6 +51,7 @@ fn eng() -> Engine<u64> {
         id: 2, // make it a member
         ..Default::default()
     };
+    eng.state.last_applied = Some(log_id(0, 0));
     eng.state.vote = Vote::new(2, 1);
     eng.state.server_state = ServerState::Candidate;
     eng.state.log_ids.append(log_id(1, 1));
@@ -140,7 +141,7 @@ fn test_handle_append_entries_req_prev_log_id_conflict() -> anyhow::Result<()> {
 
     assert_eq!(
         vec![
-            Command::InstallElectionTimer {},
+            Command::InstallElectionTimer { can_be_leader: false },
             Command::RejectElection {},
             Command::SaveVote {
                 vote: Vote::new_committed(2, 1)
@@ -203,7 +204,7 @@ fn test_handle_append_entries_req_prev_log_id_is_committed() -> anyhow::Result<(
 
     assert_eq!(
         vec![
-            Command::InstallElectionTimer {},
+            Command::InstallElectionTimer { can_be_leader: false },
             Command::RejectElection {},
             Command::SaveVote {
                 vote: Vote::new_committed(2, 1)
@@ -220,7 +221,10 @@ fn test_handle_append_entries_req_prev_log_id_is_committed() -> anyhow::Result<(
             },
             Command::AppendInputEntries { range: 1..2 },
             Command::MoveInputCursorBy { n: 2 },
-            Command::FollowerCommit { upto: log_id(1, 1) },
+            Command::FollowerCommit {
+                since: Some(log_id(0, 0)),
+                upto: log_id(1, 1)
+            },
         ],
         eng.commands
     );
@@ -269,7 +273,7 @@ fn test_handle_append_entries_req_prev_log_id_not_exists() -> anyhow::Result<()>
 
     assert_eq!(
         vec![
-            Command::InstallElectionTimer {},
+            Command::InstallElectionTimer { can_be_leader: false },
             Command::RejectElection {},
             Command::SaveVote {
                 vote: Vote::new_committed(2, 1)
@@ -333,7 +337,7 @@ fn test_handle_append_entries_req_entries_conflict() -> anyhow::Result<()> {
 
     assert_eq!(
         vec![
-            Command::InstallElectionTimer {},
+            Command::InstallElectionTimer { can_be_leader: false },
             Command::RejectElection {},
             Command::SaveVote {
                 vote: Vote::new_committed(2, 1)
@@ -353,7 +357,10 @@ fn test_handle_append_entries_req_entries_conflict() -> anyhow::Result<()> {
                 membership: Arc::new(EffectiveMembership::new(Some(log_id(3, 3)), m34()))
             },
             Command::MoveInputCursorBy { n: 2 },
-            Command::FollowerCommit { upto: log_id(3, 3) },
+            Command::FollowerCommit {
+                since: Some(log_id(0, 0)),
+                upto: log_id(3, 3)
+            },
         ],
         eng.commands
     );

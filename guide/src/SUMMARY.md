@@ -7,12 +7,14 @@
 - [Cluster Controls](./cluster-controls.md)
     - [Cluster Formation](./cluster-formation.md)
     - [Dynamic Membership](./dynamic-membership.md)
+    - [Node lifecycle](./node-lifecycle.md)
 
 - [Metrics](./metrics.md)
 
 - [Internal](./internal.md)
     - [Architecture](./architecture.md)
     - [Threads](./threading.md)
+    - [Vote](./vote.md)
     - [Replication](./replication.md)
       - [Delete-conflicting-logs](./delete_log.md)
     - [Effective Membership](./effective-membership.md)

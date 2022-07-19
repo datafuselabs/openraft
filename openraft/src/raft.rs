@@ -12,12 +12,13 @@ use tokio::sync::watch;
 use tokio::sync::Mutex;
 use tokio::task::JoinError;
 use tokio::task::JoinHandle;
-use tracing::Span;
+use tracing::Level;
 
 use crate::config::Config;
-use crate::core::is_matched_upto_date;
+use crate::core::replication_lag;
 use crate::core::Expectation;
 use crate::core::RaftCore;
+use crate::core::Tick;
 use crate::error::AddLearnerError;
 use crate::error::AppendEntriesError;
 use crate::error::CheckIsLeaderError;
@@ -29,6 +30,7 @@ use crate::error::VoteError;
 use crate::membership::IntoOptionNodes;
 use crate::metrics::RaftMetrics;
 use crate::metrics::Wait;
+use crate::storage::Snapshot;
 use crate::AppData;
 use crate::AppDataResponse;
 use crate::ChangeMembers;
@@ -121,7 +123,7 @@ enum CoreState<NID: NodeId> {
 struct RaftInner<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> {
     id: C::NodeId,
     config: Arc<Config>,
-    tx_api: mpsc::UnboundedSender<(RaftMsg<C, N, S>, Span)>,
+    tx_api: mpsc::UnboundedSender<RaftMsg<C, N, S>>,
     rx_metrics: watch::Receiver<RaftMetrics<C::NodeId>>,
     // TODO(xp): it does not need to be a async mutex.
     #[allow(clippy::type_complexity)]
@@ -181,7 +183,9 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> Raft<C, N, 
         let (tx_metrics, rx_metrics) = watch::channel(RaftMetrics::new_initial(id));
         let (tx_shutdown, rx_shutdown) = oneshot::channel();
 
-        let raft_handle = RaftCore::spawn(
+        let _tick_handle = Tick::spawn(Duration::from_millis(config.heartbeat_interval * 3 / 2), tx_api.clone());
+
+        let core_handle = RaftCore::spawn(
             id,
             config.clone(),
             network,
@@ -200,7 +204,7 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> Raft<C, N, 
             tx_shutdown: Mutex::new(Some(tx_shutdown)),
             marker_n: std::marker::PhantomData,
             marker_s: std::marker::PhantomData,
-            core_state: Mutex::new(CoreState::Running(raft_handle)),
+            core_state: Mutex::new(CoreState::Running(core_handle)),
         };
         Self { inner: Arc::new(inner) }
     }
@@ -372,8 +376,8 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> Raft<C, N, 
             .wait(None)
             .metrics(
                 |metrics| match self.check_replication_upto_date(metrics, id, membership_log_id) {
-                    Ok(resp) => {
-                        res.lock().unwrap().membership_log_id = resp;
+                    Ok(matched) => {
+                        res.lock().unwrap().matched = matched;
                         true
                     }
                     // keep waiting
@@ -432,8 +436,9 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> Raft<C, N, 
         let matched = target_metrics.matched();
 
         let last_log_id = LogId::new(matched.leader_id, metrics.last_log_index.unwrap_or_default());
+        let distance = replication_lag(&Some(matched), &Some(last_log_id));
 
-        if is_matched_upto_date(&Some(matched), &Some(last_log_id), &self.inner.config) {
+        if distance <= self.inner.config.replication_lag_threshold {
             // replication became up to date.
             return Ok(Some(matched));
         }
@@ -539,11 +544,13 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> Raft<C, N, 
     #[tracing::instrument(level = "debug", skip(self, mes, rx))]
     pub(crate) async fn call_core<T, E>(&self, mes: RaftMsg<C, N, S>, rx: RaftRespRx<T, E>) -> Result<T, E>
     where E: From<Fatal<C::NodeId>> {
-        let span = tracing::Span::current();
+        let sum = if tracing::enabled!(Level::DEBUG) {
+            None
+        } else {
+            Some(mes.summary())
+        };
 
-        let sum = if span.is_disabled() { None } else { Some(mes.summary()) };
-
-        let send_res = self.inner.tx_api.send((mes, span));
+        let send_res = self.inner.tx_api.send(mes);
 
         if send_res.is_err() {
             let fatal = self.get_core_stopped_error("sending tx to RaftCore", sum).await;
@@ -629,10 +636,7 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> Raft<C, N, 
     /// If the API channel is already closed (Raft is in shutdown), then the request functor is
     /// destroyed right away and not called at all.
     pub fn external_request<F: FnOnce(&RaftState<C::NodeId>, &mut S, &mut N) + Send + 'static>(&self, req: F) {
-        let _ignore_error = self.inner.tx_api.send((
-            RaftMsg::ExternalRequest { req: Box::new(req) },
-            tracing::span::Span::none(), // fire-and-forget, so no span
-        ));
+        let _ignore_error = self.inner.tx_api.send(RaftMsg::ExternalRequest { req: Box::new(req) });
     }
 
     /// Get a handle to the metrics channel.
@@ -715,6 +719,13 @@ pub(crate) enum RaftMsg<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStor
         rpc: VoteRequest<C::NodeId>,
         tx: RaftRespTx<VoteResponse<C::NodeId>, VoteError<C::NodeId>>,
     },
+    VoteResponse {
+        target: C::NodeId,
+        resp: VoteResponse<C::NodeId>,
+
+        /// Which ServerState sent this message. It is also the requested vote.
+        vote: Vote<C::NodeId>,
+    },
     InstallSnapshot {
         rpc: InstallSnapshotRequest<C>,
         tx: RaftRespTx<InstallSnapshotResponse<C::NodeId>, InstallSnapshotError<C::NodeId>>,
@@ -760,11 +771,58 @@ pub(crate) enum RaftMsg<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStor
         req: Box<dyn FnOnce(&RaftState<C::NodeId>, &mut S, &mut N) + Send + 'static>,
     },
 
-    /// Trigger an election
-    Elect {
-        /// Which ServerState sent this message
-        server_state_count: Option<u64>,
+    /// A tick event to wake up RaftCore to check timeout etc.
+    Tick {
+        /// ith tick
+        i: usize,
     },
+
+    /// Update the `matched` log id of a replication target.
+    /// Sent by a replication task `ReplicationCore`.
+    UpdateReplicationMatched {
+        /// The ID of the target node for which the match index is to be updated.
+        target: C::NodeId,
+
+        /// Either the last log id that has been successfully replicated to the target,
+        /// or an error in string.
+        result: Result<LogId<C::NodeId>, String>,
+
+        /// Which ServerState sent this message
+        vote: Vote<C::NodeId>,
+    },
+
+    /// An event indicating that the Raft node needs to revert to follower state.
+    /// Sent by a replication task `ReplicationCore`.
+    // TODO: rename it
+    RevertToFollower {
+        /// The ID of the target node from which the new term was observed.
+        target: C::NodeId,
+
+        /// The new vote observed.
+        new_vote: Vote<C::NodeId>,
+
+        /// Which ServerState sent this message
+        vote: Vote<C::NodeId>,
+    },
+
+    /// An event from a replication stream requesting snapshot info.
+    /// Sent by a replication task `ReplicationCore`.
+    NeedsSnapshot {
+        target: C::NodeId,
+
+        /// The log id the caller requires the snapshot has to include.
+        must_include: Option<LogId<C::NodeId>>,
+
+        /// The response channel for delivering the snapshot data.
+        tx: oneshot::Sender<Snapshot<C::NodeId, S::SnapshotData>>,
+
+        /// Which ServerState sent this message
+        vote: Vote<C::NodeId>,
+    },
+
+    /// Some critical error has taken place, and Raft needs to shutdown.
+    /// Sent by a replication task `ReplicationCore`.
+    ReplicationFatal,
 }
 
 impl<C, N, S> MessageSummary<RaftMsg<C, N, S>> for RaftMsg<C, N, S>
@@ -780,6 +838,9 @@ where
             }
             RaftMsg::RequestVote { rpc, .. } => {
                 format!("RequestVote: {}", rpc.summary())
+            }
+            RaftMsg::VoteResponse { target, resp, vote } => {
+                format!("VoteResponse: from: {}: {}, res-vote: {}", target, resp.summary(), vote)
             }
             RaftMsg::InstallSnapshot { rpc, .. } => {
                 format!("InstallSnapshot: {}", rpc.summary())
@@ -806,9 +867,41 @@ where
                 )
             }
             RaftMsg::ExternalRequest { .. } => "External Request".to_string(),
-            RaftMsg::Elect { server_state_count } => {
-                format!("Elect sent by {:?}", server_state_count)
+            RaftMsg::Tick { i } => {
+                format!("Tick {}", i)
             }
+            RaftMsg::UpdateReplicationMatched {
+                ref target,
+                ref result,
+                ref vote,
+            } => {
+                format!(
+                    "UpdateMatchIndex: target: {}, result: {:?}, server_state_vote: {}",
+                    target, result, vote
+                )
+            }
+            RaftMsg::RevertToFollower {
+                ref target,
+                ref new_vote,
+                ref vote,
+            } => {
+                format!(
+                    "RevertToFollower: target: {}, vote: {}, server_state_vote: {}",
+                    target, new_vote, vote
+                )
+            }
+            RaftMsg::NeedsSnapshot {
+                ref target,
+                ref must_include,
+                ref vote,
+                ..
+            } => {
+                format!(
+                    "NeedsSnapshot: target: {}, must_include: {:?}, server_state_vote: {}",
+                    target, must_include, vote
+                )
+            }
+            RaftMsg::ReplicationFatal => "ReplicationFatal".to_string(),
         }
     }
 }

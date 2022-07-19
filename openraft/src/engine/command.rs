@@ -20,18 +20,38 @@ pub(crate) enum Command<NID: NodeId> {
     /// Append a `range` of entries in the input buffer.
     AppendInputEntries { range: Range<usize> },
 
-    /// Commit entries that are already in the store, upto `upto`, inclusive.
-    /// And send applied result to the client that proposed the entry.
-    LeaderCommit { upto: LogId<NID> },
+    /// Replicate the committed log id to other nodes
+    ReplicateCommitted { committed: Option<LogId<NID>> },
 
     /// Commit entries that are already in the store, upto `upto`, inclusive.
-    FollowerCommit { upto: LogId<NID> },
+    /// And send applied result to the client that proposed the entry.
+    LeaderCommit {
+        since: Option<LogId<NID>>,
+        upto: LogId<NID>,
+    },
+
+    /// Commit entries that are already in the store, upto `upto`, inclusive.
+    FollowerCommit {
+        since: Option<LogId<NID>>,
+        upto: LogId<NID>,
+    },
 
     /// Replicate a `range` of entries in the input buffer.
     ReplicateInputEntries { range: Range<usize> },
 
-    /// Membership config changed, need to update replication stream etc.
-    UpdateMembership { membership: Arc<EffectiveMembership<NID>> },
+    /// Membership config changed, need to update replication streams.
+    UpdateMembership {
+        // TODO: not used yet.
+        membership: Arc<EffectiveMembership<NID>>,
+    },
+
+    /// Membership config changed, need to update replication streams.
+    UpdateReplicationStreams {
+        /// Replication to remove.
+        remove: Vec<(NID, Option<LogId<NID>>)>,
+        /// Replication to add.
+        add: Vec<(NID, Option<LogId<NID>>)>,
+    },
 
     /// Move the cursor pointing to an entry in the input buffer.
     MoveInputCursorBy { n: usize },
@@ -44,7 +64,12 @@ pub(crate) enum Command<NID: NodeId> {
 
     /// Install a timer to trigger an election, e.g., calling `Engine::elect()` after some `timeout` which is decided
     /// by the runtime. An already installed timer should be cleared.
-    InstallElectionTimer {},
+    InstallElectionTimer {
+        /// When a candidate fails to elect, it falls back to follower.
+        /// If many enough greater last-log-ids are seen, then this node can never become a leader.
+        /// Thus give it a longer sleep time before next election.
+        can_be_leader: bool,
+    },
 
     /// Reject election by other candidate for a while.
     /// The interval is decided by the runtime.
@@ -73,10 +98,12 @@ impl<NID: NodeId> Command<NID> {
         match &self {
             Command::UpdateServerState { .. } => flags.set_cluster_changed(),
             Command::AppendInputEntries { .. } => flags.set_data_changed(),
+            Command::ReplicateCommitted { .. } => {}
             Command::LeaderCommit { .. } => flags.set_data_changed(),
             Command::FollowerCommit { .. } => flags.set_data_changed(),
             Command::ReplicateInputEntries { .. } => {}
             Command::UpdateMembership { .. } => flags.set_cluster_changed(),
+            Command::UpdateReplicationStreams { .. } => flags.set_replication_changed(),
             Command::MoveInputCursorBy { .. } => {}
             Command::SaveVote { .. } => flags.set_data_changed(),
             Command::SendVote { .. } => {}
