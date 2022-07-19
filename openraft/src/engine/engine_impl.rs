@@ -69,6 +69,7 @@ pub(crate) struct Engine<NID: NodeId> {
 
     pub(crate) config: EngineConfig,
 
+    /// Last log included in snapshot
     pub(crate) snapshot_last_log_id: Option<LogId<NID>>,
 
     /// The state of this raft node.
@@ -555,7 +556,12 @@ impl<NID: NodeId> Engine<NID> {
 
         if self.config.keep_unsnapshoted_log {
             if let Some(id) = self.snapshot_last_log_id {
-                purge_end = id.index.min(purge_end);
+                tracing::debug!("the very last log included in snapshot: {}", id);
+                // logs not included in snapshot should be kept.
+                purge_end = (id.index + 1).min(purge_end);
+            } else {
+                tracing::debug!("no snapshot, abort purge");
+                return None;
             }
         }
 
