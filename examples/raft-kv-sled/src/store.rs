@@ -670,7 +670,7 @@ impl ExampleStore {
         let _logs = logs(&db);
 
         let state_machine = RwLock::new(ExampleStateMachine::new(db.clone()));
-        Arc::new(ExampleStore { db: db, state_machine })
+        Arc::new(ExampleStore { db, state_machine })
     }
 }
 
