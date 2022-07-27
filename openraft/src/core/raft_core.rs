@@ -15,7 +15,6 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
-use tokio::time::sleep_until;
 use tokio::time::timeout;
 use tokio::time::Duration;
 use tokio::time::Instant;
@@ -29,7 +28,6 @@ use crate::config::SnapshotPolicy;
 use crate::core::replication::snapshot_is_within_half_of_threshold;
 use crate::core::replication_lag;
 use crate::core::Expectation;
-use crate::core::InternalMessage;
 use crate::core::ServerState;
 use crate::core::SnapshotState;
 use crate::core::SnapshotUpdate;
@@ -142,20 +140,11 @@ pub struct RaftCore<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<
     /// The node's current snapshot state.
     pub(crate) snapshot_state: Option<SnapshotState<S::SnapshotData>>,
 
-    /// The log id upto which the current snapshot includes, inclusive, if a snapshot exists.
-    ///
-    /// This is primarily used in making a determination on when a compaction job needs to be triggered.
-    pub(crate) snapshot_last_log_id: Option<LogId<C::NodeId>>,
-
     /// The last time a heartbeat was received.
     pub(crate) last_heartbeat: Option<Instant>,
 
     /// The time to elect if a follower does not receive any append-entry message.
     pub(crate) next_election_time: VoteWiseTime<C::NodeId>,
-
-    tx_internal: mpsc::Sender<InternalMessage<C::NodeId>>,
-
-    pub(crate) rx_internal: mpsc::Receiver<InternalMessage<C::NodeId>>,
 
     pub(crate) tx_api: mpsc::UnboundedSender<RaftMsg<C, N, S>>,
     pub(crate) rx_api: mpsc::UnboundedReceiver<RaftMsg<C, N, S>>,
@@ -178,10 +167,6 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
         tx_metrics: watch::Sender<RaftMetrics<C::NodeId>>,
         rx_shutdown: oneshot::Receiver<()>,
     ) -> JoinHandle<Result<(), Fatal<C::NodeId>>> {
-        //
-
-        let (tx_internal, rx_internal) = mpsc::channel(1024);
-
         let span = tracing::span!(
             parent: tracing::Span::current(),
             Level::DEBUG,
@@ -200,12 +185,8 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
             leader_data: None,
 
             snapshot_state: None,
-            snapshot_last_log_id: None,
             last_heartbeat: None,
             next_election_time: VoteWiseTime::new(Vote::default(), Instant::now() + Duration::from_secs(86400)),
-
-            tx_internal,
-            rx_internal,
 
             tx_api,
             rx_api,
@@ -253,6 +234,7 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
         self.engine = Engine::new(self.id, &state, EngineConfig {
             max_applied_log_to_keep: self.config.max_applied_log_to_keep,
             purge_batch_size: self.config.purge_batch_size,
+            keep_unsnapshoted_log: self.config.keep_unsnapshoted_log,
         });
 
         self.engine.state.last_applied = state.last_applied;
@@ -263,7 +245,7 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
 
         // Fetch the most recent snapshot in the system.
         if let Some(snapshot) = self.storage.get_current_snapshot().await? {
-            self.snapshot_last_log_id = Some(snapshot.meta.last_log_id);
+            self.engine.snapshot_last_log_id = Some(snapshot.meta.last_log_id);
             self.engine.metrics_flags.set_data_changed();
         }
 
@@ -302,7 +284,9 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
             (NO_LOG, MULTI, IS_VOTER) => ServerState::Follower, // impossible: no logs but there are other members.
         };
 
-        if self.engine.state.server_state == ServerState::Follower {
+        if self.engine.state.server_state == ServerState::Follower
+            || self.engine.state.server_state == ServerState::Candidate
+        {
             // To ensure that restarted nodes don't disrupt a stable cluster.
             self.set_next_election_time(false);
         }
@@ -321,9 +305,11 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
                     self.leader_data = Some(LeaderData::new());
                     self.leader_loop().await?;
                 }
-                ServerState::Candidate => self.candidate_loop().await?,
-                ServerState::Follower => self.follower_learner_loop(ServerState::Follower).await?,
-                ServerState::Learner => self.follower_learner_loop(ServerState::Learner).await?,
+                ServerState::Candidate | ServerState::Follower | ServerState::Learner => {
+                    // report the new metrics for last metrics change.
+                    self.report_metrics(Update::Update(None));
+                    self.runtime_loop(self.engine.state.server_state).await?
+                }
                 ServerState::Shutdown => {
                     tracing::info!("node has shutdown");
                     return Ok(());
@@ -359,7 +345,7 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
         // Spawn parallel requests, all with the standard timeout for heartbeats.
         let mut pending = FuturesUnordered::new();
 
-        let voter_progresses = if let Some(l) = &self.engine.state.leader {
+        let voter_progresses = if let Some(l) = &self.engine.state.internal_server_state.leading() {
             l.progress
                 .iter()
                 .filter(|(id, _v)| l.progress.is_voter(id) == Some(true))
@@ -431,6 +417,8 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
 
             // If we receive a response with a greater term, then revert to follower and abort this request.
             if let AppendEntriesResponse::HigherVote(vote) = data {
+                // TODO: there is no guarantee the response vote is greater than local. Because local vote may already
+                //       changed.
                 assert!(vote > self.engine.state.vote);
                 self.engine.state.vote = vote;
                 // TODO(xp): deal with storage error
@@ -491,7 +479,7 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
 
         let curr = &self.engine.state.membership_state.effective;
         if curr.contains(&target) {
-            let matched = if let Some(l) = &self.engine.state.leader {
+            let matched = if let Some(l) = &self.engine.state.internal_server_state.leading() {
                 *l.progress.get(&target)
             } else {
                 unreachable!("it has to be a leader!!!");
@@ -640,13 +628,13 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
                 Expectation::AtLineRate => {
                     // Expect to be at line rate but not.
 
-                    let matched = if let Some(l) = &self.engine.state.leader {
+                    let matched = if let Some(l) = &self.engine.state.internal_server_state.leading() {
                         *l.progress.get(node_id)
                     } else {
                         unreachable!("it has to be a leader!!!");
                     };
 
-                    let distance = replication_lag(&matched, &last_log_id);
+                    let distance = replication_lag(&matched.map(|x| x.index), &last_log_id.map(|x| x.index));
 
                     if distance <= self.config.replication_lag_threshold {
                         continue;
@@ -732,7 +720,7 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
             current_term: self.engine.state.vote.term,
             last_log_index: self.engine.state.last_log_id().map(|id| id.index),
             last_applied: self.engine.state.last_applied,
-            snapshot: self.snapshot_last_log_id,
+            snapshot: self.engine.snapshot_last_log_id,
 
             // --- cluster ---
             state: self.engine.state.server_state,
@@ -759,7 +747,7 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
         }
     }
 
-    /// Handle the admin `init_with_config` command.
+    /// Handle the admin command `initialize`.
     ///
     /// It is allowed to initialize only when `last_log_id.is_none()` and `vote==(0,0)`.
     /// See: [Conditions for initialization](https://datafuselabs.github.io/openraft/cluster-formation.html#conditions-for-initialization)
@@ -843,24 +831,11 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
         self.last_heartbeat = Some(now);
     }
 
-    #[tracing::instrument(level = "trace", skip(self))]
-    pub(crate) async fn handle_internal_msg(
-        &mut self,
-        msg: InternalMessage<C::NodeId>,
-    ) -> Result<(), StorageError<C::NodeId>> {
-        match msg {
-            InternalMessage::SnapshotUpdate(update) => {
-                self.update_snapshot_state(update);
-            }
-        }
-        Ok(())
-    }
-
     /// Update the system's snapshot state based on the given data.
     #[tracing::instrument(level = "trace", skip(self))]
     pub(crate) fn update_snapshot_state(&mut self, update: SnapshotUpdate<C::NodeId>) {
         if let SnapshotUpdate::SnapshotComplete(log_id) = update {
-            self.snapshot_last_log_id = Some(log_id);
+            self.engine.snapshot_last_log_id = Some(log_id);
             self.engine.metrics_flags.set_data_changed();
         }
         // If snapshot state is anything other than streaming, then drop it.
@@ -886,13 +861,14 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
         };
 
         // Check to ensure we have actual entries for compaction.
-        if Some(last_applied.index) < self.snapshot_last_log_id.index() {
+        if Some(last_applied.index) < self.engine.snapshot_last_log_id.index() {
             return;
         }
 
         if !force {
             // If we are below the threshold, then there is nothing to do.
-            if self.engine.state.last_applied.next_index() - self.snapshot_last_log_id.next_index() < *threshold {
+            if self.engine.state.last_applied.next_index() - self.engine.snapshot_last_log_id.next_index() < *threshold
+            {
                 return;
             }
         }
@@ -901,7 +877,7 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
         let mut builder = self.storage.get_snapshot_builder().await;
         let (handle, reg) = AbortHandle::new_pair();
         let (chan_tx, _) = broadcast::channel(1);
-        let tx_internal = self.tx_internal.clone();
+        let tx_api = self.tx_api.clone();
         self.snapshot_state = Some(SnapshotState::Snapshotting {
             handle,
             sender: chan_tx.clone(),
@@ -914,20 +890,23 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
                 match res {
                     Ok(res) => match res {
                         Ok(snapshot) => {
-                            let _ = tx_internal.try_send(InternalMessage::SnapshotUpdate(
-                                SnapshotUpdate::SnapshotComplete(snapshot.meta.last_log_id),
-                            ));
+                            let _ = tx_api.send(RaftMsg::SnapshotUpdate {
+                                update: SnapshotUpdate::SnapshotComplete(snapshot.meta.last_log_id),
+                            });
                             // This will always succeed.
                             let _ = chan_tx.send(snapshot.meta.last_log_id.index);
                         }
                         Err(err) => {
                             tracing::error!({error=%err}, "error while generating snapshot");
-                            let _ =
-                                tx_internal.try_send(InternalMessage::SnapshotUpdate(SnapshotUpdate::SnapshotFailed));
+                            let _ = tx_api.send(RaftMsg::SnapshotUpdate {
+                                update: SnapshotUpdate::SnapshotFailed,
+                            });
                         }
                     },
                     Err(_aborted) => {
-                        let _ = tx_internal.try_send(InternalMessage::SnapshotUpdate(SnapshotUpdate::SnapshotFailed));
+                        let _ = tx_api.send(RaftMsg::SnapshotUpdate {
+                            update: SnapshotUpdate::SnapshotFailed,
+                        });
                     }
                 }
             }
@@ -1235,86 +1214,19 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
         };
         self.report_metrics(Update::Update(Some(replication_metrics)));
 
-        loop {
-            if !self.engine.state.server_state.is_leader() {
-                tracing::info!("id={} state becomes: {:?}", self.id, self.engine.state.server_state);
-
-                // implicit drop replication_rx
-                // notify to all nodes DO NOT send replication event any more.
-                return Ok(());
-            }
-
-            self.flush_metrics();
-
-            tokio::select! {
-                Some(msg) = self.rx_api.recv() => {
-                    self.handle_api_msg(msg).await?;
-                },
-
-                Some(internal_msg) = self.rx_internal.recv() => {
-                    tracing::info!("leader recv from rx_internal: {:?}", internal_msg);
-                    self.handle_internal_msg(internal_msg).await?;
-                }
-
-                Ok(_) = &mut self.rx_shutdown => {
-                    tracing::info!("leader recv from rx_shudown");
-                    self.set_target_state(ServerState::Shutdown);
-                }
-            }
-        }
+        self.runtime_loop(ServerState::Leader).await
     }
 
-    #[tracing::instrument(level="debug", skip(self), fields(id=display(self.id), raft_state="candidate"))]
-    async fn candidate_loop(&mut self) -> Result<(), Fatal<C::NodeId>> {
-        // report the new state before enter the loop
-        self.report_metrics(Update::Update(None));
-
-        loop {
-            if !self.engine.state.server_state.is_candidate() {
-                return Ok(());
-            }
-
-            self.flush_metrics();
-
-            self.set_next_election_time(true);
-
-            self.engine.elect();
-            self.run_engine_commands::<Entry<C>>(&[]).await?;
-
-            loop {
-                if !self.engine.state.server_state.is_candidate() {
-                    return Ok(());
-                }
-
-                let timeout_fut = sleep_until(self.get_next_election_time());
-
-                tokio::select! {
-                    _ = timeout_fut => {
-                        // This election has timed-out. Leave to the caller to decide what to do.
-                        break;
-                    },
-
-                    Some(msg) = self.rx_api.recv() => {
-                        self.handle_api_msg(msg).await?;
-                    },
-
-                    Some(internal_msg) = self.rx_internal.recv() => {
-                        self.handle_internal_msg(internal_msg).await?;
-                    },
-
-                    Ok(_) = &mut self.rx_shutdown => self.set_target_state(ServerState::Shutdown),
-                }
-            }
-        }
-    }
-
+    /// Run an event handling loop until server state changes
     #[tracing::instrument(level="debug", skip(self), fields(id=display(self.id)))]
-    async fn follower_learner_loop(&mut self, server_state: ServerState) -> Result<(), Fatal<C::NodeId>> {
-        // report the new state before enter the loop
-        self.report_metrics(Update::Update(None));
-
+    async fn runtime_loop(&mut self, server_state: ServerState) -> Result<(), Fatal<C::NodeId>> {
         loop {
             if self.engine.state.server_state != server_state {
+                tracing::info!(
+                    "id={} server_state becomes: {:?}",
+                    self.id,
+                    self.engine.state.server_state
+                );
                 return Ok(());
             }
 
@@ -1325,9 +1237,10 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
                     self.handle_api_msg(msg).await?;
                 },
 
-                Some(internal_msg) = self.rx_internal.recv() => self.handle_internal_msg(internal_msg).await?,
-
-                Ok(_) = &mut self.rx_shutdown => self.set_target_state(ServerState::Shutdown),
+                Ok(_) = &mut self.rx_shutdown => {
+                    tracing::info!("recv rx_shutdown");
+                    self.set_target_state(ServerState::Shutdown);
+                }
             }
         }
     }
@@ -1441,12 +1354,15 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
                 let _ = tx.send(self.handle_vote_request(rpc).await.extract_fatal()?);
             }
             RaftMsg::VoteResponse { target, resp, vote } => {
-                if self.does_server_state_count_match(vote, "RevertToFollower") {
+                if self.does_vote_match(vote, "VoteResponse") {
                     self.handle_vote_resp(resp, target).await?;
                 }
             }
             RaftMsg::InstallSnapshot { rpc, tx } => {
                 let _ = tx.send(self.handle_install_snapshot_request(rpc).await.extract_fatal()?);
+            }
+            RaftMsg::SnapshotUpdate { update } => {
+                self.update_snapshot_state(update);
             }
             RaftMsg::CheckIsLeaderRequest { tx } => {
                 if is_leader() {
@@ -1494,14 +1410,15 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
 
                 let current_vote = &self.engine.state.vote;
 
-                // Follower timer: next election
+                // Follower/Candidate timer: next election
                 if let Some(t) = self.next_election_time.get_time(current_vote) {
                     #[allow(clippy::collapsible_else_if)]
                     if Instant::now() < t {
                         // timeout has not expired.
                     } else {
                         if self.engine.state.membership_state.effective.is_voter(&self.id) {
-                            self.set_target_state(ServerState::Candidate)
+                            self.engine.elect();
+                            self.run_engine_commands::<Entry<C>>(&[]).await?;
                         } else {
                             // Node is switched to learner after setting up next election time.
                         }
@@ -1510,13 +1427,13 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
             }
 
             RaftMsg::RevertToFollower { target, new_vote, vote } => {
-                if self.does_server_state_count_match(vote, "RevertToFollower") {
+                if self.does_vote_match(vote, "RevertToFollower") {
                     self.handle_revert_to_follower(target, new_vote).await?;
                 }
             }
 
             RaftMsg::UpdateReplicationMatched { target, result, vote } => {
-                if self.does_server_state_count_match(vote, "UpdateReplicationMatched") {
+                if self.does_vote_match(vote, "UpdateReplicationMatched") {
                     self.handle_update_matched(target, result).await?;
                 }
             }
@@ -1527,7 +1444,7 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
                 tx,
                 vote,
             } => {
-                if self.does_server_state_count_match(vote, "NeedsSnapshot") {
+                if self.does_vote_match(vote, "NeedsSnapshot") {
                     self.handle_needs_snapshot(must_include, tx).await?;
                 }
             }
@@ -1542,12 +1459,13 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
     #[tracing::instrument(level = "trace", skip(self))]
     async fn handle_revert_to_follower(
         &mut self,
-        _: C::NodeId,
+        _target: C::NodeId,
         vote: Vote<C::NodeId>,
     ) -> Result<(), StorageError<C::NodeId>> {
         if vote > self.engine.state.vote {
             self.engine.state.vote = vote;
             self.save_vote().await?;
+            // TODO: when switching to Follower, the next election time has to be set.
             self.set_target_state(ServerState::Follower);
         }
         Ok(())
@@ -1613,7 +1531,7 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
 
     /// If a message is sent by a previous server state but is received by current server state,
     /// it is a stale message and should be just ignored.
-    fn does_server_state_count_match(&self, vote: Vote<C::NodeId>, msg: impl Display) -> bool {
+    fn does_vote_match(&self, vote: Vote<C::NodeId>, msg: impl Display) -> bool {
         if vote != self.engine.state.vote {
             tracing::warn!(
                 "vote changed: msg sent by: {:?}; curr: {}; ignore when ({})",

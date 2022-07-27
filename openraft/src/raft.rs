@@ -18,6 +18,7 @@ use crate::config::Config;
 use crate::core::replication_lag;
 use crate::core::Expectation;
 use crate::core::RaftCore;
+use crate::core::SnapshotUpdate;
 use crate::core::Tick;
 use crate::error::AddLearnerError;
 use crate::error::AppendEntriesError;
@@ -435,8 +436,7 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> Raft<C, N, 
 
         let matched = target_metrics.matched();
 
-        let last_log_id = LogId::new(matched.leader_id, metrics.last_log_index.unwrap_or_default());
-        let distance = replication_lag(&Some(matched), &Some(last_log_id));
+        let distance = replication_lag(&Some(matched.index), &metrics.last_log_index);
 
         if distance <= self.inner.config.replication_lag_threshold {
             // replication became up to date.
@@ -731,6 +731,10 @@ pub(crate) enum RaftMsg<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStor
         tx: RaftRespTx<InstallSnapshotResponse<C::NodeId>, InstallSnapshotError<C::NodeId>>,
     },
 
+    SnapshotUpdate {
+        update: SnapshotUpdate<C::NodeId>,
+    },
+
     ClientWriteRequest {
         rpc: ClientWriteRequest<C>,
         tx: RaftRespTx<ClientWriteResponse<C>, ClientWriteError<C::NodeId>>,
@@ -844,6 +848,9 @@ where
             }
             RaftMsg::InstallSnapshot { rpc, .. } => {
                 format!("InstallSnapshot: {}", rpc.summary())
+            }
+            RaftMsg::SnapshotUpdate { update } => {
+                format!("SnapshotUpdate: {:?}", update)
             }
             RaftMsg::ClientWriteRequest { rpc, .. } => {
                 format!("ClientWriteRequest: {}", rpc.summary())
