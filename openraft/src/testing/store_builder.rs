@@ -19,9 +19,9 @@ where
     C: RaftTypeConfig,
     S: RaftStorage<C>,
 {
-    async fn run_test<Fun, Ret, Res>(&self, t: Fun) -> Result<Ret, StorageError<C::NodeId>>
+    async fn run_test<Fun, Ret, Res>(&self, t: Fun) -> Result<Ret, StorageError<C::NodeId, C::NodeData>>
     where
-        Res: Future<Output = Result<Ret, StorageError<C::NodeId>>> + Send,
+        Res: Future<Output = Result<Ret, StorageError<C::NodeId, C::NodeData>>> + Send,
         Fun: Fn(S) -> Res + Sync + Send;
 }
 
@@ -49,9 +49,9 @@ where
     BaseStore: RaftStorage<C>,
     BaseBuilder: StoreBuilder<C, BaseStore>,
 {
-    async fn run_test<Fun, Ret, Res>(&self, t: Fun) -> Result<Ret, StorageError<C::NodeId>>
+    async fn run_test<Fun, Ret, Res>(&self, t: Fun) -> Result<Ret, StorageError<C::NodeId, C::NodeData>>
     where
-        Res: Future<Output = Result<Ret, StorageError<C::NodeId>>> + Send,
+        Res: Future<Output = Result<Ret, StorageError<C::NodeId, C::NodeData>>> + Send,
         Fun: Fn(StoreExt<C, BaseStore>) -> Res + Sync + Send,
     {
         self.base_builder

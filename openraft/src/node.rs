@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::fmt::Display;
 use std::fmt::Formatter;
@@ -43,6 +42,25 @@ pub trait NodeId: NodeIdEssential {}
 #[cfg(not(feature = "serde"))]
 impl<T> NodeId for T where T: NodeIdEssential {}
 
+/// Essential trait bound for application level node-data, except serde.
+pub trait NodeDataEssential: Sized + Send + Sync + Eq + PartialEq + Debug + Clone + Default + 'static {}
+impl<T> NodeDataEssential for T where T: Sized + Send + Sync + Eq + PartialEq + Debug + Clone + Default + 'static {}
+
+/// A Raft node's application level data.
+///
+/// `NodeData` holds applicaiton level information relevant to a raft node
+#[cfg(feature = "serde")]
+pub trait NodeData: NodeDataEssential + serde::Serialize + for<'a> serde::Deserialize<'a> {}
+
+#[cfg(feature = "serde")]
+impl<T> NodeData for T where T: NodeDataEssential + serde::Serialize + for<'a> serde::Deserialize<'a> {}
+
+#[cfg(not(feature = "serde"))]
+pub trait NodeData: NodeDataEssential {}
+
+#[cfg(not(feature = "serde"))]
+impl<T> NodeData for T where T: NodeDataEssential {}
+
 /// Additional node information.
 ///
 /// The most common usage is to store the connecting address of a node.
@@ -51,13 +69,18 @@ impl<T> NodeId for T where T: NodeIdEssential {}
 /// An application is also free not to use this storage and implements its own node-id to address mapping.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
-pub struct Node {
+pub struct Node<ND>
+where ND: NodeData
+{
     pub addr: String,
     /// Other User defined data.
-    pub data: BTreeMap<String, String>,
+    #[cfg_attr(feature = "serde", serde(bound = ""))]
+    pub data: ND,
 }
 
-impl Node {
+impl<ND> Node<ND>
+where ND: NodeData
+{
     pub fn new(addr: impl ToString) -> Self {
         Self {
             addr: addr.to_string(),
@@ -66,15 +89,10 @@ impl Node {
     }
 }
 
-impl Display for Node {
+impl<ND> Display for Node<ND>
+where ND: NodeData
+{
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}; ", self.addr)?;
-        for (i, (k, v)) in self.data.iter().enumerate() {
-            if i > 0 {
-                write!(f, ",")?;
-            }
-            write!(f, "{}:{}", k, v)?;
-        }
-        Ok(())
+        write!(f, "{}; {:?}", self.addr, self.data)
     }
 }

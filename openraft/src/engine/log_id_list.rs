@@ -20,7 +20,9 @@ pub struct LogIdList<NID: NodeId> {
     key_log_ids: Vec<LogId<NID>>,
 }
 
-impl<NID: NodeId> LogIdList<NID> {
+impl<NID> LogIdList<NID>
+where NID: NodeId
+{
     /// Load all log ids that are the first one proposed by a leader.
     ///
     /// E.g., log ids with the same leader id will be got rid of, except the smallest.
@@ -45,7 +47,7 @@ impl<NID: NodeId> LogIdList<NID> {
         last_purged_log_id: Option<LogId<NID>>,
         last_log_id: Option<LogId<NID>>,
         sto: &mut StorageHelper<'_, C, Sto>,
-    ) -> Result<LogIdList<NID>, StorageError<NID>>
+    ) -> Result<LogIdList<NID>, StorageError<NID, C::NodeData>>
     where
         C: RaftTypeConfig<NodeId = NID>,
         Sto: RaftStorage<C>,

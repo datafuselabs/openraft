@@ -188,7 +188,7 @@ async fn test_cluster() -> anyhow::Result<()> {
     match x {
         Err(e) => {
             let s = e.to_string();
-            let expect_err:String = "error occur on remote peer 2: has to forward request to: Some(1), Some(Node { addr: \"127.0.0.1:21001\", data: {} })".to_string();
+            let expect_err:String = "error occur on remote peer 2: has to forward request to: Some(1), Some(Node { addr: \"127.0.0.1:21001\", data: () })".to_string();
 
             assert_eq!(s, expect_err);
         }

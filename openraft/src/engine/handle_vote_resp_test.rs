@@ -22,16 +22,16 @@ fn log_id(term: u64, index: u64) -> LogId<u64> {
     }
 }
 
-fn m12() -> Membership<u64> {
-    Membership::<u64>::new(vec![btreeset! {1,2}], None)
+fn m12() -> Membership<u64, ()> {
+    Membership::<u64, ()>::new(vec![btreeset! {1,2}], None)
 }
 
-fn m1234() -> Membership<u64> {
-    Membership::<u64>::new(vec![btreeset! {1,2,3,4}], None)
+fn m1234() -> Membership<u64, ()> {
+    Membership::<u64, ()>::new(vec![btreeset! {1,2,3,4}], None)
 }
 
-fn eng() -> Engine<u64> {
-    Engine::<u64>::default()
+fn eng() -> Engine<u64, ()> {
+    Engine::<u64, ()>::default()
 }
 
 #[test]

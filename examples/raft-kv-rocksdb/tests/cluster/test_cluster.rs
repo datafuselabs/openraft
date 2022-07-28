@@ -9,6 +9,7 @@ use openraft::Node;
 use raft_key_value_rocks::client::ExampleClient;
 use raft_key_value_rocks::start_example_raft_node;
 use raft_key_value_rocks::store::ExampleRequest;
+use raft_key_value_rocks::ExampleNodeData;
 
 /// Setup a cluster of 3 nodes.
 /// Write to it and read from it.
@@ -91,9 +92,9 @@ async fn test_cluster() -> Result<(), Box<dyn std::error::Error>> {
         x.membership_config.nodes().map(|(nid, node)| (*nid, node.clone())).collect::<BTreeMap<_, _>>();
     assert_eq!(
         btreemap! {
-            1 => Some(Node{addr: get_rpc_addr(1), data: btreemap!{"api_addr".into() => get_addr(1)}}),
-            2 => Some(Node{addr: get_rpc_addr(2), data: btreemap!{"api_addr".into() => get_addr(2)}}),
-            3 => Some(Node{addr: get_rpc_addr(3), data: btreemap!{"api_addr".into() => get_addr(3)}}),
+            1 => Some(Node{addr: get_rpc_addr(1), data: ExampleNodeData{api_addr: get_addr(1)}}),
+            2 => Some(Node{addr: get_rpc_addr(2), data: ExampleNodeData{api_addr: get_addr(2)}}),
+            3 => Some(Node{addr: get_rpc_addr(3), data: ExampleNodeData{api_addr: get_addr(3)}}),
         },
         nodes_in_cluster
     );
@@ -189,7 +190,7 @@ async fn test_cluster() -> Result<(), Box<dyn std::error::Error>> {
     match x {
         Err(e) => {
             let s = e.to_string();
-            let expect_err:String = "error occur on remote peer 2: has to forward request to: Some(1), Some(Node { addr: \"127.0.0.1:22001\", data: {\"api_addr\": \"127.0.0.1:21001\"} })".to_string();
+            let expect_err:String = "error occur on remote peer 2: has to forward request to: Some(1), Some(Node { addr: \"127.0.0.1:22001\", data: ExampleNodeData { api_addr: \"127.0.0.1:21001\" } })".to_string();
 
             assert_eq!(s, expect_err);
         }

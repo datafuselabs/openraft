@@ -49,19 +49,25 @@ where C: RaftTypeConfig
     async fn send_append_entries(
         &mut self,
         rpc: AppendEntriesRequest<C>,
-    ) -> Result<AppendEntriesResponse<C::NodeId>, RPCError<C::NodeId, AppendEntriesError<C::NodeId>>>;
+    ) -> Result<
+        AppendEntriesResponse<C::NodeId>,
+        RPCError<C::NodeId, C::NodeData, AppendEntriesError<C::NodeId, C::NodeData>>,
+    >;
 
     /// Send an InstallSnapshot RPC to the target Raft node (§7).
     async fn send_install_snapshot(
         &mut self,
         rpc: InstallSnapshotRequest<C>,
-    ) -> Result<InstallSnapshotResponse<C::NodeId>, RPCError<C::NodeId, InstallSnapshotError<C::NodeId>>>;
+    ) -> Result<
+        InstallSnapshotResponse<C::NodeId>,
+        RPCError<C::NodeId, C::NodeData, InstallSnapshotError<C::NodeId, C::NodeData>>,
+    >;
 
     /// Send a RequestVote RPC to the target Raft node (§5).
     async fn send_vote(
         &mut self,
         rpc: VoteRequest<C::NodeId>,
-    ) -> Result<VoteResponse<C::NodeId>, RPCError<C::NodeId, VoteError<C::NodeId>>>;
+    ) -> Result<VoteResponse<C::NodeId>, RPCError<C::NodeId, C::NodeData, VoteError<C::NodeId, C::NodeData>>>;
 }
 
 /// A trait defining the interface for a Raft network factory to create connections between cluster members.
@@ -85,5 +91,5 @@ where C: RaftTypeConfig
     ///
     /// The method is intentionally async to give the implementation a chance to use asynchronous
     /// sync primitives to serialize access to the common internal object, if needed.
-    async fn connect(&mut self, target: C::NodeId, node: Option<&Node>) -> Self::Network;
+    async fn connect(&mut self, target: C::NodeId, node: Option<&Node<C::NodeData>>) -> Self::Network;
 }

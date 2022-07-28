@@ -11,6 +11,7 @@ use tide::Response;
 use tide::StatusCode;
 
 use crate::app::ExampleApp;
+use crate::ExampleNodeData;
 use crate::ExampleNodeId;
 use crate::Server;
 
@@ -31,8 +32,7 @@ pub fn rest(app: &mut Server) {
 /// (by calling `change-membership`)
 async fn add_learner(mut req: Request<Arc<ExampleApp>>) -> tide::Result {
     let (node_id, api_addr, addr): (ExampleNodeId, String, String) = req.body_json().await?;
-    let mut data = BTreeMap::new();
-    data.insert("api_addr".into(), api_addr);
+    let data = ExampleNodeData { api_addr };
     let node = Node { addr, data };
     let res = req.state().raft.add_learner(node_id, Some(node), true).await;
     Ok(Response::builder(StatusCode::Ok).body(Body::from_json(&res)?).build())
@@ -48,8 +48,10 @@ async fn change_membership(mut req: Request<Arc<ExampleApp>>) -> tide::Result {
 /// Initialize a single-node cluster.
 async fn init(req: Request<Arc<ExampleApp>>) -> tide::Result {
     let mut nodes = BTreeMap::new();
-    let mut data = BTreeMap::new();
-    data.insert("api_addr".into(), req.state().api_addr.clone());
+    let data = ExampleNodeData {
+        api_addr: req.state().api_addr.clone(),
+    };
+
     let addr = req.state().rcp_addr.clone();
     nodes.insert(req.state().id, Node { addr, data });
     let res = req.state().raft.initialize(nodes).await;
@@ -60,6 +62,6 @@ async fn init(req: Request<Arc<ExampleApp>>) -> tide::Result {
 async fn metrics(req: Request<Arc<ExampleApp>>) -> tide::Result {
     let metrics = req.state().raft.metrics().borrow().clone();
 
-    let res: Result<RaftMetrics<ExampleNodeId>, Infallible> = Ok(metrics);
+    let res: Result<RaftMetrics<ExampleNodeId, ExampleNodeData>, Infallible> = Ok(metrics);
     Ok(Response::builder(StatusCode::Ok).body(Body::from_json(&res)?).build())
 }

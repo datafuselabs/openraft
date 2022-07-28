@@ -12,6 +12,7 @@ use tokio::io::AsyncWrite;
 
 use crate::defensive::check_range_matches_entries;
 use crate::membership::EffectiveMembership;
+use crate::node::NodeData;
 use crate::raft_types::SnapshotId;
 use crate::raft_types::StateMachineChanges;
 use crate::Entry;
@@ -23,12 +24,16 @@ use crate::Vote;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize), serde(bound = ""))]
-pub struct SnapshotMeta<NID: NodeId> {
+pub struct SnapshotMeta<NID, ND>
+where
+    NID: NodeId,
+    ND: NodeData,
+{
     // Log entries upto which this snapshot includes, inclusive.
     pub last_log_id: LogId<NID>,
 
     // The last applied membership config.
-    pub last_membership: EffectiveMembership<NID>,
+    pub last_membership: EffectiveMembership<NID, ND>,
 
     /// To identify a snapshot when transferring.
     /// Caveat: even when two snapshot is built with the same `last_log_id`, they still could be different in bytes.
@@ -37,13 +42,14 @@ pub struct SnapshotMeta<NID: NodeId> {
 
 /// The data associated with the current snapshot.
 #[derive(Debug)]
-pub struct Snapshot<NID, S>
+pub struct Snapshot<NID, ND, S>
 where
     NID: NodeId,
+    ND: NodeData,
     S: AsyncRead + AsyncSeek + Send + Unpin + 'static,
 {
     /// metadata of a snapshot
-    pub meta: SnapshotMeta<NID>,
+    pub meta: SnapshotMeta<NID, ND>,
 
     /// A read handle to the associated snapshot.
     pub snapshot: Box<S>,
@@ -80,7 +86,7 @@ where C: RaftTypeConfig
     async fn get_log_entries<RB: RangeBounds<u64> + Clone + Debug + Send + Sync>(
         &mut self,
         range: RB,
-    ) -> Result<Vec<Entry<C>>, StorageError<C::NodeId>> {
+    ) -> Result<Vec<Entry<C>>, StorageError<C::NodeId, C::NodeData>> {
         let res = self.try_get_log_entries(range.clone()).await?;
 
         check_range_matches_entries(range, &res)?;
@@ -91,7 +97,10 @@ where C: RaftTypeConfig
     /// Try to get an log entry.
     ///
     /// It does not return an error if the log entry at `log_index` is not found.
-    async fn try_get_log_entry(&mut self, log_index: u64) -> Result<Option<Entry<C>>, StorageError<C::NodeId>> {
+    async fn try_get_log_entry(
+        &mut self,
+        log_index: u64,
+    ) -> Result<Option<Entry<C>>, StorageError<C::NodeId, C::NodeData>> {
         let mut res = self.try_get_log_entries(log_index..(log_index + 1)).await?;
         Ok(res.pop())
     }
@@ -102,7 +111,7 @@ where C: RaftTypeConfig
     /// The returned `last_log_id` could be the log id of the last present log entry, or the `last_purged_log_id` if
     /// there is no entry at all.
     // NOTE: This can be made into sync, provided all state machines will use atomic read or the like.
-    async fn get_log_state(&mut self) -> Result<LogState<C>, StorageError<C::NodeId>>;
+    async fn get_log_state(&mut self) -> Result<LogState<C>, StorageError<C::NodeId, C::NodeData>>;
 
     /// Get a series of log entries from storage.
     ///
@@ -112,7 +121,7 @@ where C: RaftTypeConfig
     async fn try_get_log_entries<RB: RangeBounds<u64> + Clone + Debug + Send + Sync>(
         &mut self,
         range: RB,
-    ) -> Result<Vec<Entry<C>>, StorageError<C::NodeId>>;
+    ) -> Result<Vec<Entry<C>>, StorageError<C::NodeId, C::NodeData>>;
 }
 
 /// A trait defining the interface for a Raft state machine snapshot subsystem.
@@ -136,7 +145,9 @@ where
     /// Building snapshot can be done by:
     /// - Performing log compaction, e.g. merge log entries that operates on the same key, like a LSM-tree does,
     /// - or by fetching a snapshot from the state machine.
-    async fn build_snapshot(&mut self) -> Result<Snapshot<C::NodeId, SD>, StorageError<C::NodeId>>;
+    async fn build_snapshot(
+        &mut self,
+    ) -> Result<Snapshot<C::NodeId, C::NodeData, SD>, StorageError<C::NodeId, C::NodeData>>;
 
     // NOTES:
     // This interface is geared toward small file-based snapshots. However, not all snapshots can
@@ -174,9 +185,9 @@ where C: RaftTypeConfig
 
     // --- Vote
 
-    async fn save_vote(&mut self, vote: &Vote<C::NodeId>) -> Result<(), StorageError<C::NodeId>>;
+    async fn save_vote(&mut self, vote: &Vote<C::NodeId>) -> Result<(), StorageError<C::NodeId, C::NodeData>>;
 
-    async fn read_vote(&mut self) -> Result<Option<Vote<C::NodeId>>, StorageError<C::NodeId>>;
+    async fn read_vote(&mut self) -> Result<Option<Vote<C::NodeId>>, StorageError<C::NodeId, C::NodeData>>;
 
     // --- Log
 
@@ -190,13 +201,16 @@ where C: RaftTypeConfig
     ///
     /// Though the entries will always be presented in order, each entry's index should be used to
     /// determine its location to be written in the log.
-    async fn append_to_log(&mut self, entries: &[&Entry<C>]) -> Result<(), StorageError<C::NodeId>>;
+    async fn append_to_log(&mut self, entries: &[&Entry<C>]) -> Result<(), StorageError<C::NodeId, C::NodeData>>;
 
     /// Delete conflict log entries since `log_id`, inclusive.
-    async fn delete_conflict_logs_since(&mut self, log_id: LogId<C::NodeId>) -> Result<(), StorageError<C::NodeId>>;
+    async fn delete_conflict_logs_since(
+        &mut self,
+        log_id: LogId<C::NodeId>,
+    ) -> Result<(), StorageError<C::NodeId, C::NodeData>>;
 
     /// Delete applied log entries upto `log_id`, inclusive.
-    async fn purge_logs_upto(&mut self, log_id: LogId<C::NodeId>) -> Result<(), StorageError<C::NodeId>>;
+    async fn purge_logs_upto(&mut self, log_id: LogId<C::NodeId>) -> Result<(), StorageError<C::NodeId, C::NodeData>>;
 
     // --- State Machine
 
@@ -205,7 +219,10 @@ where C: RaftTypeConfig
     // NOTE: This can be made into sync, provided all state machines will use atomic read or the like.
     async fn last_applied_state(
         &mut self,
-    ) -> Result<(Option<LogId<C::NodeId>>, EffectiveMembership<C::NodeId>), StorageError<C::NodeId>>;
+    ) -> Result<
+        (Option<LogId<C::NodeId>>, EffectiveMembership<C::NodeId, C::NodeData>),
+        StorageError<C::NodeId, C::NodeData>,
+    >;
 
     /// Apply the given payload of entries to the state machine.
     ///
@@ -226,7 +243,10 @@ where C: RaftTypeConfig
     // then collect completions on this channel and update the client with the result once all
     // the preceding operations have been applied to the state machine. This way we'll reach
     // operation pipelining w/o the need to wait for the completion of each operation inline.
-    async fn apply_to_state_machine(&mut self, entries: &[&Entry<C>]) -> Result<Vec<C::R>, StorageError<C::NodeId>>;
+    async fn apply_to_state_machine(
+        &mut self,
+        entries: &[&Entry<C>],
+    ) -> Result<Vec<C::R>, StorageError<C::NodeId, C::NodeData>>;
 
     // --- Snapshot
 
@@ -243,7 +263,9 @@ where C: RaftTypeConfig
     /// ### implementation guide
     /// See the [storage chapter of the guide](https://datafuselabs.github.io/openraft/storage.html)
     /// for details on log compaction / snapshotting.
-    async fn begin_receiving_snapshot(&mut self) -> Result<Box<Self::SnapshotData>, StorageError<C::NodeId>>;
+    async fn begin_receiving_snapshot(
+        &mut self,
+    ) -> Result<Box<Self::SnapshotData>, StorageError<C::NodeId, C::NodeData>>;
 
     /// Install a snapshot which has finished streaming from the cluster leader.
     ///
@@ -253,9 +275,9 @@ where C: RaftTypeConfig
     /// A snapshot created from an earlier call to `begin_receiving_snapshot` which provided the snapshot.
     async fn install_snapshot(
         &mut self,
-        meta: &SnapshotMeta<C::NodeId>,
+        meta: &SnapshotMeta<C::NodeId, C::NodeData>,
         snapshot: Box<Self::SnapshotData>,
-    ) -> Result<StateMachineChanges<C>, StorageError<C::NodeId>>;
+    ) -> Result<StateMachineChanges<C>, StorageError<C::NodeId, C::NodeData>>;
 
     /// Get a readable handle to the current snapshot, along with its metadata.
     ///
@@ -270,7 +292,7 @@ where C: RaftTypeConfig
     /// of the snapshot, which should be decoded for creating this method's response data.
     async fn get_current_snapshot(
         &mut self,
-    ) -> Result<Option<Snapshot<C::NodeId, Self::SnapshotData>>, StorageError<C::NodeId>>;
+    ) -> Result<Option<Snapshot<C::NodeId, C::NodeData, Self::SnapshotData>>, StorageError<C::NodeId, C::NodeData>>;
 }
 
 /// APIs for debugging a store.

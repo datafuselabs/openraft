@@ -13,9 +13,9 @@ use crate::RocksStore;
 struct RocksBuilder {}
 #[async_trait]
 impl StoreBuilder<Config, Arc<RocksStore>> for RocksBuilder {
-    async fn run_test<Fun, Ret, Res>(&self, t: Fun) -> Result<Ret, StorageError<RocksNodeId>>
+    async fn run_test<Fun, Ret, Res>(&self, t: Fun) -> Result<Ret, StorageError<RocksNodeId, ()>>
     where
-        Res: Future<Output = Result<Ret, StorageError<RocksNodeId>>> + Send,
+        Res: Future<Output = Result<Ret, StorageError<RocksNodeId, ()>>> + Send,
         Fun: Fn(Arc<RocksStore>) -> Res + Sync + Send,
     {
         let td = tempdir::TempDir::new("RocksBuilder").expect("couldn't create temp dir");
@@ -49,7 +49,7 @@ impl StoreBuilder<Config, Arc<RocksStore>> for RocksBuilder {
 /// }
 /// ```
 #[test]
-pub fn test_mem_store() -> Result<(), StorageError<RocksNodeId>> {
+pub fn test_mem_store() -> Result<(), StorageError<RocksNodeId, ()>> {
     Suite::test_all(RocksBuilder {})?;
     Ok(())
 }

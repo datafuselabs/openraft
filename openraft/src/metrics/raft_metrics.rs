@@ -4,6 +4,7 @@ use crate::core::ServerState;
 use crate::error::Fatal;
 use crate::membership::EffectiveMembership;
 use crate::metrics::ReplicationMetrics;
+use crate::node::NodeData;
 use crate::summary::MessageSummary;
 use crate::versioned::Versioned;
 use crate::LogId;
@@ -12,8 +13,12 @@ use crate::NodeId;
 /// A set of metrics describing the current state of a Raft node.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize), serde(bound = ""))]
-pub struct RaftMetrics<NID: NodeId> {
-    pub running_state: Result<(), Fatal<NID>>,
+pub struct RaftMetrics<NID, ND>
+where
+    NID: NodeId,
+    ND: NodeData,
+{
+    pub running_state: Result<(), Fatal<NID, ND>>,
 
     /// The ID of the Raft node.
     pub id: NID,
@@ -44,7 +49,7 @@ pub struct RaftMetrics<NID: NodeId> {
     pub current_leader: Option<NID>,
 
     /// The current membership config of the cluster.
-    pub membership_config: Arc<EffectiveMembership<NID>>,
+    pub membership_config: Arc<EffectiveMembership<NID, ND>>,
 
     // ---
     // --- replication ---
@@ -53,7 +58,11 @@ pub struct RaftMetrics<NID: NodeId> {
     pub replication: Option<Versioned<ReplicationMetrics<NID>>>,
 }
 
-impl<NID: NodeId> MessageSummary<RaftMetrics<NID>> for RaftMetrics<NID> {
+impl<NID, ND> MessageSummary<RaftMetrics<NID, ND>> for RaftMetrics<NID, ND>
+where
+    NID: NodeId,
+    ND: NodeData,
+{
     fn summary(&self) -> String {
         format!("Metrics{{id:{},{:?}, term:{}, last_log:{:?}, last_applied:{:?}, leader:{:?}, membership:{}, snapshot:{:?}, replication:{}",
                 self.id,
@@ -69,7 +78,11 @@ impl<NID: NodeId> MessageSummary<RaftMetrics<NID>> for RaftMetrics<NID> {
     }
 }
 
-impl<NID: NodeId> RaftMetrics<NID> {
+impl<NID, ND> RaftMetrics<NID, ND>
+where
+    NID: NodeId,
+    ND: NodeData,
+{
     pub fn new_initial(id: NID) -> Self {
         Self {
             running_state: Ok(()),

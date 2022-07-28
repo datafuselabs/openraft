@@ -26,10 +26,10 @@ impl ExampleNetwork {
     pub async fn send_rpc<Req, Resp, Err>(
         &self,
         target: ExampleNodeId,
-        target_node: Option<&Node>,
+        target_node: Option<&Node<()>>,
         uri: &str,
         req: Req,
-    ) -> Result<Resp, RPCError<ExampleNodeId, Err>>
+    ) -> Result<Resp, RPCError<ExampleNodeId, (), Err>>
     where
         Req: Serialize,
         Err: std::error::Error + DeserializeOwned,
@@ -53,7 +53,7 @@ impl ExampleNetwork {
 impl RaftNetworkFactory<ExampleTypeConfig> for ExampleNetwork {
     type Network = ExampleNetworkConnection;
 
-    async fn connect(&mut self, target: ExampleNodeId, node: Option<&Node>) -> Self::Network {
+    async fn connect(&mut self, target: ExampleNodeId, node: Option<&Node<()>>) -> Self::Network {
         ExampleNetworkConnection {
             owner: ExampleNetwork {},
             target,
@@ -65,7 +65,7 @@ impl RaftNetworkFactory<ExampleTypeConfig> for ExampleNetwork {
 pub struct ExampleNetworkConnection {
     owner: ExampleNetwork,
     target: ExampleNodeId,
-    target_node: Option<Node>,
+    target_node: Option<Node<()>>,
 }
 
 #[async_trait]
@@ -73,22 +73,25 @@ impl RaftNetwork<ExampleTypeConfig> for ExampleNetworkConnection {
     async fn send_append_entries(
         &mut self,
         req: AppendEntriesRequest<ExampleTypeConfig>,
-    ) -> Result<AppendEntriesResponse<ExampleNodeId>, RPCError<ExampleNodeId, AppendEntriesError<ExampleNodeId>>> {
+    ) -> Result<AppendEntriesResponse<ExampleNodeId>, RPCError<ExampleNodeId, (), AppendEntriesError<ExampleNodeId, ()>>>
+    {
         self.owner.send_rpc(self.target, self.target_node.as_ref(), "raft-append", req).await
     }
 
     async fn send_install_snapshot(
         &mut self,
         req: InstallSnapshotRequest<ExampleTypeConfig>,
-    ) -> Result<InstallSnapshotResponse<ExampleNodeId>, RPCError<ExampleNodeId, InstallSnapshotError<ExampleNodeId>>>
-    {
+    ) -> Result<
+        InstallSnapshotResponse<ExampleNodeId>,
+        RPCError<ExampleNodeId, (), InstallSnapshotError<ExampleNodeId, ()>>,
+    > {
         self.owner.send_rpc(self.target, self.target_node.as_ref(), "raft-snapshot", req).await
     }
 
     async fn send_vote(
         &mut self,
         req: VoteRequest<ExampleNodeId>,
-    ) -> Result<VoteResponse<ExampleNodeId>, RPCError<ExampleNodeId, VoteError<ExampleNodeId>>> {
+    ) -> Result<VoteResponse<ExampleNodeId>, RPCError<ExampleNodeId, (), VoteError<ExampleNodeId, ()>>> {
         self.owner.send_rpc(self.target, self.target_node.as_ref(), "raft-vote", req).await
     }
 }

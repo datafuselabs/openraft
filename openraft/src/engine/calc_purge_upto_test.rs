@@ -10,8 +10,8 @@ fn log_id(term: u64, index: u64) -> LogId<u64> {
     }
 }
 
-fn eng() -> Engine<u64> {
-    let mut eng = Engine::<u64>::default();
+fn eng() -> Engine<u64, ()> {
+    let mut eng = Engine::<u64, ()>::default();
     eng.state.log_ids = LogIdList::new(vec![
         //
         log_id(0, 0),

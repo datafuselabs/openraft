@@ -76,8 +76,8 @@ pub(crate) trait RaftRuntime<C: RaftTypeConfig> {
         &mut self,
         input_entries: &'e [Ent],
         curr: &mut usize,
-        cmd: &Command<C::NodeId>,
-    ) -> Result<(), StorageError<C::NodeId>>
+        cmd: &Command<C::NodeId, C::NodeData>,
+    ) -> Result<(), StorageError<C::NodeId, C::NodeData>>
     where
         Ent: RaftLogId<C::NodeId> + Sync + Send + 'e,
         &'e Ent: Into<Entry<C>>;

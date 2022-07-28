@@ -3,23 +3,32 @@ use std::ops::Bound;
 
 use anyerror::AnyError;
 
+use crate::node::NodeData;
 use crate::LogId;
 use crate::NodeId;
 use crate::SnapshotMeta;
 use crate::Vote;
 
 /// Convert error to StorageError::IO();
-pub trait ToStorageResult<NID: NodeId, T> {
+pub trait ToStorageResult<NID, ND, T>
+where
+    NID: NodeId,
+    ND: NodeData,
+{
     /// Convert Result<T, E> to Result<T, StorageError::IO(StorageIOError)>
     ///
     /// `f` provides error context for building the StorageIOError.
-    fn sto_res<F>(self, f: F) -> Result<T, StorageError<NID>>
-    where F: FnOnce() -> (ErrorSubject<NID>, ErrorVerb);
+    fn sto_res<F>(self, f: F) -> Result<T, StorageError<NID, ND>>
+    where F: FnOnce() -> (ErrorSubject<NID, ND>, ErrorVerb);
 }
 
-impl<NID: NodeId, T> ToStorageResult<NID, T> for Result<T, std::io::Error> {
-    fn sto_res<F>(self, f: F) -> Result<T, StorageError<NID>>
-    where F: FnOnce() -> (ErrorSubject<NID>, ErrorVerb) {
+impl<NID, ND, T> ToStorageResult<NID, ND, T> for Result<T, std::io::Error>
+where
+    NID: NodeId,
+    ND: NodeData,
+{
+    fn sto_res<F>(self, f: F) -> Result<T, StorageError<NID, ND>>
+    where F: FnOnce() -> (ErrorSubject<NID, ND>, ErrorVerb) {
         match self {
             Ok(x) => Ok(x),
             Err(e) => {
@@ -35,9 +44,13 @@ impl<NID: NodeId, T> ToStorageResult<NID, T> for Result<T, std::io::Error> {
 /// E.g. re-applying an log entry is a violation that may be a potential bug.
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize), serde(bound = ""))]
-pub struct DefensiveError<NID: NodeId> {
+pub struct DefensiveError<NID, ND>
+where
+    NID: NodeId,
+    ND: NodeData,
+{
     /// The subject that violates store defensive check, e.g. hard-state, log or state machine.
-    pub subject: ErrorSubject<NID>,
+    pub subject: ErrorSubject<NID, ND>,
 
     /// The description of the violation.
     pub violation: Violation<NID>,
@@ -45,8 +58,12 @@ pub struct DefensiveError<NID: NodeId> {
     pub backtrace: Option<String>,
 }
 
-impl<NID: NodeId> DefensiveError<NID> {
-    pub fn new(subject: ErrorSubject<NID>, violation: Violation<NID>) -> Self {
+impl<NID, ND> DefensiveError<NID, ND>
+where
+    NID: NodeId,
+    ND: NodeData,
+{
+    pub fn new(subject: ErrorSubject<NID, ND>, violation: Violation<NID>) -> Self {
         Self {
             subject,
             violation,
@@ -55,7 +72,11 @@ impl<NID: NodeId> DefensiveError<NID> {
     }
 }
 
-impl<NID: NodeId> std::fmt::Display for DefensiveError<NID> {
+impl<NID, ND> std::fmt::Display for DefensiveError<NID, ND>
+where
+    NID: NodeId,
+    ND: NodeData,
+{
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "'{:?}' violates: '{}'", self.subject, self.violation)
     }
@@ -63,7 +84,11 @@ impl<NID: NodeId> std::fmt::Display for DefensiveError<NID> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize), serde(bound = ""))]
-pub enum ErrorSubject<NID: NodeId> {
+pub enum ErrorSubject<NID, ND>
+where
+    NID: NodeId,
+    ND: NodeData,
+{
     /// A general storage error
     Store,
 
@@ -86,7 +111,7 @@ pub enum ErrorSubject<NID: NodeId> {
     StateMachine,
 
     /// Error happened when operating snapshot.
-    Snapshot(SnapshotMeta<NID>),
+    Snapshot(SnapshotMeta<NID, ND>),
 
     None,
 }
@@ -155,13 +180,17 @@ pub enum Violation<NID: NodeId> {
 /// A storage error could be either a defensive check error or an error occurred when doing the actual io operation.
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize), serde(bound = ""))]
-pub enum StorageError<NID: NodeId> {
+pub enum StorageError<NID, ND>
+where
+    NID: NodeId,
+    ND: NodeData,
+{
     /// An error raised by defensive check.
     #[error(transparent)]
     Defensive {
         #[from]
         #[cfg_attr(feature = "bt", backtrace)]
-        source: DefensiveError<NID>,
+        source: DefensiveError<NID, ND>,
     },
 
     /// An error raised by io operation.
@@ -169,26 +198,30 @@ pub enum StorageError<NID: NodeId> {
     IO {
         #[from]
         #[cfg_attr(feature = "bt", backtrace)]
-        source: StorageIOError<NID>,
+        source: StorageIOError<NID, ND>,
     },
 }
 
-impl<NID: NodeId> StorageError<NID> {
-    pub fn into_defensive(self) -> Option<DefensiveError<NID>> {
+impl<NID, ND> StorageError<NID, ND>
+where
+    NID: NodeId,
+    ND: NodeData,
+{
+    pub fn into_defensive(self) -> Option<DefensiveError<NID, ND>> {
         match self {
             StorageError::Defensive { source } => Some(source),
             _ => None,
         }
     }
 
-    pub fn into_io(self) -> Option<StorageIOError<NID>> {
+    pub fn into_io(self) -> Option<StorageIOError<NID, ND>> {
         match self {
             StorageError::IO { source } => Some(source),
             _ => None,
         }
     }
 
-    pub fn from_io_error(subject: ErrorSubject<NID>, verb: ErrorVerb, io_error: std::io::Error) -> Self {
+    pub fn from_io_error(subject: ErrorSubject<NID, ND>, verb: ErrorVerb, io_error: std::io::Error) -> Self {
         let sto_io_err = StorageIOError::new(subject, verb, AnyError::new(&io_error));
         StorageError::IO { source: sto_io_err }
     }
@@ -197,21 +230,33 @@ impl<NID: NodeId> StorageError<NID> {
 /// Error that occurs when operating the store.
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize), serde(bound = ""))]
-pub struct StorageIOError<NID: NodeId> {
-    subject: ErrorSubject<NID>,
+pub struct StorageIOError<NID, ND>
+where
+    NID: NodeId,
+    ND: NodeData,
+{
+    subject: ErrorSubject<NID, ND>,
     verb: ErrorVerb,
     source: AnyError,
     backtrace: Option<String>,
 }
 
-impl<NID: NodeId> std::fmt::Display for StorageIOError<NID> {
+impl<NID, ND> std::fmt::Display for StorageIOError<NID, ND>
+where
+    NID: NodeId,
+    ND: NodeData,
+{
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "when {:?} {:?}: {}", self.verb, self.subject, self.source)
     }
 }
 
-impl<NID: NodeId> StorageIOError<NID> {
-    pub fn new(subject: ErrorSubject<NID>, verb: ErrorVerb, source: AnyError) -> Self {
+impl<NID, ND> StorageIOError<NID, ND>
+where
+    NID: NodeId,
+    ND: NodeData,
+{
+    pub fn new(subject: ErrorSubject<NID, ND>, verb: ErrorVerb, source: AnyError) -> Self {
         Self {
             subject,
             verb,
