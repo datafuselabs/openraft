@@ -1,31 +1,26 @@
 use std::fmt::Debug;
 
-use crate::node::NodeData;
 use crate::raft_types::RaftLogId;
 use crate::LogId;
 use crate::Membership;
 use crate::MessageSummary;
-use crate::NodeId;
+use crate::NodeType;
 use crate::RaftTypeConfig;
 
 /// Defines operations on an entry payload.
-pub trait RaftPayload<NID, ND>
-where
-    ND: NodeData,
-    NID: NodeId,
+pub trait RaftPayload<NT>
+where NT: NodeType
 {
     /// Return `Some(())` if the entry payload is blank.
     fn is_blank(&self) -> bool;
 
     /// Return `Some(&Membership)` if the entry payload is a membership payload.
-    fn get_membership(&self) -> Option<&Membership<NID, ND>>;
+    fn get_membership(&self) -> Option<&Membership<NT>>;
 }
 
 /// Defines operations on an entry.
-pub trait RaftEntry<NID, ND>: RaftPayload<NID, ND> + RaftLogId<NID>
-where
-    ND: NodeData,
-    NID: NodeId,
+pub trait RaftEntry<NT>: RaftPayload<NT> + RaftLogId<NT::NodeId>
+where NT: NodeType
 {
 }
 
@@ -39,7 +34,7 @@ pub enum EntryPayload<C: RaftTypeConfig> {
     Normal(C::D),
 
     /// A change-membership log entry.
-    Membership(Membership<C::NodeId, C::NodeData>),
+    Membership(Membership<C::NodeType>),
 }
 
 impl<C: RaftTypeConfig> MessageSummary<EntryPayload<C>> for EntryPayload<C> {
@@ -58,7 +53,7 @@ impl<C: RaftTypeConfig> MessageSummary<EntryPayload<C>> for EntryPayload<C> {
 #[derive(Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize), serde(bound = ""))]
 pub struct Entry<C: RaftTypeConfig> {
-    pub log_id: LogId<C::NodeId>,
+    pub log_id: LogId<<C::NodeType as NodeType>::NodeId>,
 
     /// This entry's payload.
     pub payload: EntryPayload<C>,
@@ -98,7 +93,7 @@ impl<C: RaftTypeConfig> MessageSummary<Entry<C>> for Entry<C> {
 /// This is only used internally, to avoid memory copy for the payload.
 #[derive(Clone)]
 pub(crate) struct EntryRef<'p, C: RaftTypeConfig> {
-    pub log_id: LogId<C::NodeId>,
+    pub log_id: LogId<<C::NodeType as NodeType>::NodeId>,
     pub payload: &'p EntryPayload<C>,
 }
 
@@ -145,12 +140,12 @@ impl<'p, C: RaftTypeConfig> EntryRef<'p, C> {
 
 // impl traits for EntryPayload
 
-impl<C: RaftTypeConfig> RaftPayload<C::NodeId, C::NodeData> for EntryPayload<C> {
+impl<C: RaftTypeConfig> RaftPayload<C::NodeType> for EntryPayload<C> {
     fn is_blank(&self) -> bool {
         matches!(self, EntryPayload::Blank)
     }
 
-    fn get_membership(&self) -> Option<&Membership<C::NodeId, C::NodeData>> {
+    fn get_membership(&self) -> Option<&Membership<C::NodeType>> {
         if let EntryPayload::Membership(m) = self {
             Some(m)
         } else {
@@ -161,48 +156,48 @@ impl<C: RaftTypeConfig> RaftPayload<C::NodeId, C::NodeData> for EntryPayload<C> 
 
 // impl traits for Entry
 
-impl<C: RaftTypeConfig> RaftPayload<C::NodeId, C::NodeData> for Entry<C> {
+impl<C: RaftTypeConfig> RaftPayload<C::NodeType> for Entry<C> {
     fn is_blank(&self) -> bool {
         self.payload.is_blank()
     }
 
-    fn get_membership(&self) -> Option<&Membership<C::NodeId, C::NodeData>> {
+    fn get_membership(&self) -> Option<&Membership<C::NodeType>> {
         self.payload.get_membership()
     }
 }
 
-impl<C: RaftTypeConfig> RaftLogId<C::NodeId> for Entry<C> {
-    fn get_log_id(&self) -> &LogId<C::NodeId> {
+impl<C: RaftTypeConfig> RaftLogId<<C::NodeType as NodeType>::NodeId> for Entry<C> {
+    fn get_log_id(&self) -> &LogId<<C::NodeType as NodeType>::NodeId> {
         &self.log_id
     }
 
-    fn set_log_id(&mut self, log_id: &LogId<C::NodeId>) {
+    fn set_log_id(&mut self, log_id: &LogId<<C::NodeType as NodeType>::NodeId>) {
         self.log_id = *log_id;
     }
 }
 
-impl<C: RaftTypeConfig> RaftEntry<C::NodeId, C::NodeData> for Entry<C> {}
+impl<C: RaftTypeConfig> RaftEntry<C::NodeType> for Entry<C> {}
 
 // impl traits for RefEntry
 
-impl<'p, C: RaftTypeConfig> RaftPayload<C::NodeId, C::NodeData> for EntryRef<'p, C> {
+impl<'p, C: RaftTypeConfig> RaftPayload<C::NodeType> for EntryRef<'p, C> {
     fn is_blank(&self) -> bool {
         self.payload.is_blank()
     }
 
-    fn get_membership(&self) -> Option<&Membership<C::NodeId, C::NodeData>> {
+    fn get_membership(&self) -> Option<&Membership<C::NodeType>> {
         self.payload.get_membership()
     }
 }
 
-impl<'p, C: RaftTypeConfig> RaftLogId<C::NodeId> for EntryRef<'p, C> {
-    fn get_log_id(&self) -> &LogId<C::NodeId> {
+impl<'p, C: RaftTypeConfig> RaftLogId<<C::NodeType as NodeType>::NodeId> for EntryRef<'p, C> {
+    fn get_log_id(&self) -> &LogId<<C::NodeType as NodeType>::NodeId> {
         &self.log_id
     }
 
-    fn set_log_id(&mut self, log_id: &LogId<C::NodeId>) {
+    fn set_log_id(&mut self, log_id: &LogId<<C::NodeType as NodeType>::NodeId>) {
         self.log_id = *log_id;
     }
 }
 
-impl<'p, C: RaftTypeConfig> RaftEntry<C::NodeId, C::NodeData> for EntryRef<'p, C> {}
+impl<'p, C: RaftTypeConfig> RaftEntry<C::NodeType> for EntryRef<'p, C> {}

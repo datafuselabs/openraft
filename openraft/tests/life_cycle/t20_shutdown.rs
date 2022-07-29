@@ -7,10 +7,22 @@ use maplit::btreeset;
 use openraft::error::ClientWriteError;
 use openraft::error::Fatal;
 use openraft::Config;
+use openraft::NodeType;
 use openraft::ServerState;
 
 use crate::fixtures::init_default_ut_tracing;
 use crate::fixtures::RaftRouter;
+
+pub type TestNodeId = u64;
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+
+pub struct TestNodeType {}
+impl NodeType for TestNodeType {
+    type NodeId = TestNodeId;
+    type NodeData = ();
+}
 
 /// Cluster shutdown test.
 ///
@@ -83,7 +95,7 @@ async fn return_error_after_panic() -> Result<()> {
     {
         let res = router.client_request(0, "foo", 2).await;
         let err = res.unwrap_err();
-        assert_eq!(ClientWriteError::<u64, ()>::Fatal(Fatal::Panicked), err);
+        assert_eq!(ClientWriteError::<_>::Fatal(Fatal::Panicked), err);
     }
 
     Ok(())
@@ -109,7 +121,7 @@ async fn return_error_after_shutdown() -> Result<()> {
     {
         let res = router.client_request(0, "foo", 2).await;
         let err = res.unwrap_err();
-        assert_eq!(ClientWriteError::<u64, _>::Fatal(Fatal::Stopped), err);
+        assert_eq!(ClientWriteError::<_>::Fatal(Fatal::Stopped), err);
     }
 
     Ok(())

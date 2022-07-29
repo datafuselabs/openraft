@@ -2,6 +2,18 @@ use crate::engine::Engine;
 use crate::engine::LogIdList;
 use crate::LeaderId;
 use crate::LogId;
+use crate::NodeType;
+
+pub type TestNodeId = u64;
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+
+pub struct TestNodeType {}
+impl NodeType for TestNodeType {
+    type NodeId = TestNodeId;
+    type NodeData = ();
+}
 
 fn log_id(term: u64, index: u64) -> LogId<u64> {
     LogId::<u64> {
@@ -10,8 +22,8 @@ fn log_id(term: u64, index: u64) -> LogId<u64> {
     }
 }
 
-fn eng() -> Engine<u64, ()> {
-    let mut eng = Engine::<u64, ()>::default();
+fn eng() -> Engine<TestNodeType> {
+    let mut eng = Engine::<TestNodeType>::default();
     eng.state.log_ids = LogIdList::new(vec![
         //
         log_id(0, 0),

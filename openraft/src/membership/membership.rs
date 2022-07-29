@@ -6,62 +6,52 @@ use maplit::btreemap;
 
 use crate::error::MissingNodeInfo;
 use crate::membership::NodeRole;
-use crate::node::NodeData;
 use crate::quorum::AsJoint;
 use crate::quorum::FindCoherent;
 use crate::quorum::Joint;
 use crate::quorum::QuorumSet;
 use crate::MessageSummary;
 use crate::Node;
-use crate::NodeId;
+use crate::NodeType;
 
 /// BTreeMap for mapping node-id the node.
-pub type NodeMap<NID, ND> = BTreeMap<NID, Option<Node<ND>>>;
+#[allow(type_alias_bounds)] // This is needed
+pub type NodeMap<NT: NodeType> = BTreeMap<NT::NodeId, Option<Node<NT>>>;
 /// Convert other types into the internal data structure for node infos
-pub trait IntoOptionNodes<NID, ND>
-where
-    ND: NodeData,
-    NID: NodeId,
+pub trait IntoOptionNodes<NT>
+where NT: NodeType
 {
-    fn into_option_nodes(self) -> NodeMap<NID, ND>;
+    fn into_option_nodes(self) -> NodeMap<NT>;
 }
 
-impl<NID, ND> IntoOptionNodes<NID, ND> for ()
-where
-    ND: NodeData,
-    NID: NodeId,
+impl<NT> IntoOptionNodes<NT> for ()
+where NT: NodeType
 {
-    fn into_option_nodes(self) -> NodeMap<NID, ND> {
+    fn into_option_nodes(self) -> NodeMap<NT> {
         btreemap! {}
     }
 }
 
-impl<NID, ND> IntoOptionNodes<NID, ND> for BTreeSet<NID>
-where
-    ND: NodeData,
-    NID: NodeId,
+impl<NT> IntoOptionNodes<NT> for BTreeSet<NT::NodeId>
+where NT: NodeType
 {
-    fn into_option_nodes(self) -> NodeMap<NID, ND> {
+    fn into_option_nodes(self) -> NodeMap<NT> {
         self.into_iter().map(|node_id| (node_id, None)).collect()
     }
 }
 
-impl<NID, ND> IntoOptionNodes<NID, ND> for BTreeMap<NID, Node<ND>>
-where
-    ND: NodeData,
-    NID: NodeId,
+impl<NT> IntoOptionNodes<NT> for BTreeMap<NT::NodeId, Node<NT>>
+where NT: NodeType
 {
-    fn into_option_nodes(self) -> NodeMap<NID, ND> {
+    fn into_option_nodes(self) -> NodeMap<NT> {
         self.into_iter().map(|(node_id, n)| (node_id, Some(n))).collect()
     }
 }
 
-impl<NID, ND> IntoOptionNodes<NID, ND> for NodeMap<NID, ND>
-where
-    ND: NodeData,
-    NID: NodeId,
+impl<NT> IntoOptionNodes<NT> for NodeMap<NT>
+where NT: NodeType
 {
-    fn into_option_nodes(self) -> NodeMap<NID, ND> {
+    fn into_option_nodes(self) -> NodeMap<NT> {
         self
     }
 }
@@ -72,42 +62,36 @@ where
 /// every config.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize), serde(bound = ""))]
-pub struct Membership<NID, ND>
-where
-    ND: NodeData,
-    NID: NodeId,
+pub struct Membership<NT>
+where NT: NodeType
 {
     /// Multi configs of members.
     ///
     /// AKA a joint config in original raft paper.
-    configs: Vec<BTreeSet<NID>>,
+    configs: Vec<BTreeSet<NT::NodeId>>,
 
     /// Additional info of all nodes, e.g., the connecting host and port.
     ///
     /// A node-id key that is in `nodes` but is not in `configs` is a **learner**.
     /// The values in this map must all be `Some` or `None`.
-    nodes: BTreeMap<NID, Option<Node<ND>>>,
+    nodes: BTreeMap<NT::NodeId, Option<Node<NT>>>,
 }
 
-impl<NID, ND> TryFrom<BTreeMap<NID, Option<Node<ND>>>> for Membership<NID, ND>
-where
-    ND: NodeData,
-    NID: NodeId,
+impl<NT> TryFrom<BTreeMap<NT::NodeId, Option<Node<NT>>>> for Membership<NT>
+where NT: NodeType
 {
-    type Error = MissingNodeInfo<NID>;
+    type Error = MissingNodeInfo<NT>;
 
-    fn try_from(b: BTreeMap<NID, Option<Node<ND>>>) -> Result<Self, Self::Error> {
-        let member_ids = b.keys().cloned().collect::<BTreeSet<NID>>();
+    fn try_from(b: BTreeMap<NT::NodeId, Option<Node<NT>>>) -> Result<Self, Self::Error> {
+        let member_ids = b.keys().cloned().collect::<BTreeSet<NT::NodeId>>();
 
         let membership = Membership::with_nodes(vec![member_ids], b)?;
         Ok(membership)
     }
 }
 
-impl<NID, ND> MessageSummary<Membership<NID, ND>> for Membership<NID, ND>
-where
-    ND: NodeData,
-    NID: NodeId,
+impl<NT> MessageSummary<Membership<NT>> for Membership<NT>
+where NT: NodeType
 {
     fn summary(&self) -> String {
         let mut res = vec!["members:[".to_string()];
@@ -151,15 +135,13 @@ where
     }
 }
 
-impl<NID, ND> Membership<NID, ND>
-where
-    ND: NodeData,
-    NID: NodeId,
+impl<NT> Membership<NT>
+where NT: NodeType
 {
     /// Create a new Membership of multiple configs(joint) and optionally a set of learner node ids.
     ///
     /// A node id that is in `node_ids` but is not in `configs` is a **learner**.
-    pub fn new(configs: Vec<BTreeSet<NID>>, node_ids: Option<BTreeSet<NID>>) -> Self {
+    pub fn new(configs: Vec<BTreeSet<NT::NodeId>>, node_ids: Option<BTreeSet<NT::NodeId>>) -> Self {
         let voter_ids = configs.as_joint().ids().collect::<BTreeSet<_>>();
 
         let nodes = match node_ids {
@@ -182,8 +164,8 @@ where
     /// - `BTreeMap<NodeId, Node>` or `BTreeMap<NodeId, Option<Node>>` to specify learner nodes with node infos. Node
     ///   ids not in `configs` are learner node ids. In this case, every node id in `configs` has to present in `nodes`
     ///   or an error will be returned.
-    pub(crate) fn with_nodes<T>(configs: Vec<BTreeSet<NID>>, nodes: T) -> Result<Self, MissingNodeInfo<NID>>
-    where T: IntoOptionNodes<NID, ND> {
+    pub(crate) fn with_nodes<T>(configs: Vec<BTreeSet<NT::NodeId>>, nodes: T) -> Result<Self, MissingNodeInfo<NT>>
+    where T: IntoOptionNodes<NT> {
         let nodes = nodes.into_option_nodes();
 
         for voter_id in configs.as_joint().ids() {
@@ -214,9 +196,9 @@ where
     /// Node that present in `old` will **NOT** be replaced because changing the address of a node potentially breaks
     /// consensus guarantee.
     pub(crate) fn extend_nodes(
-        old: BTreeMap<NID, Option<Node<ND>>>,
-        new: &BTreeMap<NID, Option<Node<ND>>>,
-    ) -> BTreeMap<NID, Option<Node<ND>>> {
+        old: BTreeMap<NT::NodeId, Option<Node<NT>>>,
+        new: &BTreeMap<NT::NodeId, Option<Node<NT>>>,
+    ) -> BTreeMap<NT::NodeId, Option<Node<NT>>> {
         let mut res = old;
 
         for (k, v) in new.iter() {
@@ -234,7 +216,7 @@ where
         self.configs.len() > 1
     }
 
-    pub(crate) fn add_learner(&self, node_id: NID, node: Option<Node<ND>>) -> Result<Self, MissingNodeInfo<NID>> {
+    pub(crate) fn add_learner(&self, node_id: NT::NodeId, node: Option<Node<NT>>) -> Result<Self, MissingNodeInfo<NT>> {
         let configs = self.configs.clone();
 
         let nodes = Self::extend_nodes(self.nodes.clone(), &btreemap! {node_id=>node});
@@ -246,17 +228,15 @@ where
 }
 
 /// Membership API
-impl<NID, ND> Membership<NID, ND>
-where
-    ND: NodeData,
-    NID: NodeId,
+impl<NT> Membership<NT>
+where NT: NodeType
 {
     /// Return if a node is a voter or learner, or not in this membership config at all.
     #[allow(dead_code)]
-    pub(crate) fn get_node_role(&self, nid: &NID) -> Option<NodeRole> {
-        if self.is_voter(nid) {
+    pub(crate) fn get_node_role(&self, node_id: &NT::NodeId) -> Option<NodeRole> {
+        if self.is_voter(node_id) {
             Some(NodeRole::Voter)
-        } else if self.contains(nid) {
+        } else if self.contains(node_id) {
             Some(NodeRole::Learner)
         } else {
             None
@@ -264,7 +244,7 @@ where
     }
 
     /// Check if the given `NodeId` exists and is a voter.
-    pub(crate) fn is_voter(&self, node_id: &NID) -> bool {
+    pub(crate) fn is_voter(&self, node_id: &NT::NodeId) -> bool {
         for c in self.configs.iter() {
             if c.contains(node_id) {
                 return true;
@@ -274,29 +254,29 @@ where
     }
 
     /// Returns an Iterator of all voter node ids. Learners are not included.
-    pub(crate) fn voter_ids(&self) -> impl Iterator<Item = NID> {
+    pub(crate) fn voter_ids(&self) -> impl Iterator<Item = NT::NodeId> {
         self.configs.as_joint().ids()
     }
 
     /// Returns an Iterator of all learner node ids. Voters are not included.
     #[allow(dead_code)]
-    pub(crate) fn learner_ids(&self) -> impl Iterator<Item = NID> + '_ {
+    pub(crate) fn learner_ids(&self) -> impl Iterator<Item = NT::NodeId> + '_ {
         self.nodes.keys().filter(|x| !self.is_voter(x)).copied()
     }
 
     /// Returns if a voter or learner exists in this membership.
-    pub(crate) fn contains(&self, node_id: &NID) -> bool {
+    pub(crate) fn contains(&self, node_id: &NT::NodeId) -> bool {
         self.nodes.contains_key(node_id)
     }
 
     /// Get a the node(either voter or learner) by node id.
-    pub(crate) fn get_node(&self, node_id: &NID) -> Option<&Node<ND>> {
+    pub(crate) fn get_node(&self, node_id: &NT::NodeId) -> Option<&Node<NT>> {
         let x = self.nodes.get(node_id)?;
         x.as_ref()
     }
 
     /// Returns an Iterator of all nodes(voters and learners).
-    pub fn nodes(&self) -> impl Iterator<Item = (&NID, &Option<Node<ND>>)> {
+    pub fn nodes(&self) -> impl Iterator<Item = (&NT::NodeId, &Option<Node<NT>>)> {
         self.nodes.iter()
     }
 
@@ -304,16 +284,14 @@ where
     ///
     /// Membership is defined by a joint of multiple configs.
     /// Each config is a vec of node-id.
-    pub fn get_joint_config(&self) -> &Vec<BTreeSet<NID>> {
+    pub fn get_joint_config(&self) -> &Vec<BTreeSet<NT::NodeId>> {
         &self.configs
     }
 }
 
 /// Quorum related API
-impl<NID, ND> Membership<NID, ND>
-where
-    ND: NodeData,
-    NID: NodeId,
+impl<NT> Membership<NT>
+where NT: NodeType
 {
     /// Returns the next safe membership to change to while the expected final membership is `goal`.
     ///
@@ -332,8 +310,8 @@ where
     ///     curr = next;
     /// }
     /// ```
-    pub(crate) fn next_safe<T>(&self, goal: T, turn_to_learner: bool) -> Result<Self, MissingNodeInfo<NID>>
-    where T: IntoOptionNodes<NID, ND> {
+    pub(crate) fn next_safe<T>(&self, goal: T, turn_to_learner: bool) -> Result<Self, MissingNodeInfo<NT>>
+    where T: IntoOptionNodes<NT> {
         let goal = goal.into_option_nodes();
 
         let goal_ids = goal.keys().cloned().collect::<BTreeSet<_>>();

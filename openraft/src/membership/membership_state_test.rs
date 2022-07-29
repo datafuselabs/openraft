@@ -7,6 +7,18 @@ use crate::LeaderId;
 use crate::LogId;
 use crate::Membership;
 use crate::MembershipState;
+use crate::NodeType;
+
+pub type TestNodeId = u64;
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+
+pub struct TestNodeType {}
+impl NodeType for TestNodeType {
+    type NodeId = TestNodeId;
+    type NodeData = ();
+}
 
 fn log_id(term: u64, index: u64) -> LogId<u64> {
     LogId::<u64> {
@@ -15,12 +27,12 @@ fn log_id(term: u64, index: u64) -> LogId<u64> {
     }
 }
 
-fn m1() -> Membership<u64, ()> {
-    Membership::<u64, ()>::new(vec![btreeset! {1}], None)
+fn m1() -> Membership<TestNodeType> {
+    Membership::<TestNodeType>::new(vec![btreeset! {1}], None)
 }
 
-fn m123_345() -> Membership<u64, ()> {
-    Membership::<u64, ()>::new(vec![btreeset! {1,2,3}, btreeset! {3,4,5}], None)
+fn m123_345() -> Membership<TestNodeType> {
+    Membership::<TestNodeType>::new(vec![btreeset! {1,2,3}, btreeset! {3,4,5}], None)
 }
 
 #[test]

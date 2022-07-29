@@ -7,6 +7,7 @@ use maplit::btreeset;
 use memstore::IntoMemClientRequest;
 use openraft::Config;
 use openraft::LogIdOptionExt;
+use openraft::NodeType;
 use openraft::Raft;
 use openraft::RaftStorage;
 use openraft::RaftTypeConfig;
@@ -75,7 +76,7 @@ async fn learner_restart() -> Result<()> {
 }
 
 fn assert_node_state<C: RaftTypeConfig, S: RaftStorage<C>>(
-    id: C::NodeId,
+    id: <C::NodeType as NodeType>::NodeId,
     node: &MemRaft<C, S>,
     expected_term: u64,
     expected_log: u64,

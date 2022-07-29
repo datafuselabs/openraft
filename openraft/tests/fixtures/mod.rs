@@ -55,6 +55,7 @@ use openraft::LeaderId;
 use openraft::LogId;
 use openraft::LogIdOptionExt;
 use openraft::Node;
+use openraft::NodeType;
 use openraft::Raft;
 use openraft::RaftMetrics;
 use openraft::RaftNetwork;
@@ -70,6 +71,17 @@ use tracing_appender::non_blocking::WorkerGuard;
 use crate::fixtures::logging::init_file_logging;
 
 pub mod logging;
+
+pub type TestNodeId = u64;
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+
+pub struct TestNodeType {}
+impl NodeType for TestNodeType {
+    type NodeId = TestNodeId;
+    type NodeData = ();
+}
 
 pub type StoreWithDefensive<C = MemConfig, S = Arc<MemStore>> = StoreExt<C, S>;
 
@@ -142,9 +154,9 @@ where
     config: Arc<Config>,
     /// The table of all nodes currently known to this router instance.
     #[allow(clippy::type_complexity)]
-    routing_table: Arc<Mutex<BTreeMap<C::NodeId, (MemRaft<C, S>, StoreWithDefensive<C, S>)>>>,
+    routing_table: Arc<Mutex<BTreeMap<<C::NodeType as NodeType>::NodeId, (MemRaft<C, S>, StoreWithDefensive<C, S>)>>>,
     /// Nodes which are isolated can neither send nor receive frames.
-    isolated_nodes: Arc<Mutex<HashSet<C::NodeId>>>,
+    isolated_nodes: Arc<Mutex<HashSet<<C::NodeType as NodeType>::NodeId>>>,
 
     /// To emulate network delay for sending, in milliseconds.
     /// 0 means no delay.
@@ -237,10 +249,10 @@ where
     #[tracing::instrument(level = "debug", skip(self))]
     pub async fn new_nodes_from_single(
         &mut self,
-        node_ids: BTreeSet<C::NodeId>,
-        learners: BTreeSet<C::NodeId>,
+        node_ids: BTreeSet<<C::NodeType as NodeType>::NodeId>,
+        learners: BTreeSet<<C::NodeType as NodeType>::NodeId>,
     ) -> anyhow::Result<u64> {
-        let leader_id = C::NodeId::default();
+        let leader_id = <C::NodeType as NodeType>::NodeId::default();
         assert!(node_ids.contains(&leader_id));
 
         self.new_raft_node(leader_id);
@@ -281,7 +293,7 @@ where
         if node_ids.len() > 1 {
             tracing::info!("--- change membership to setup voters: {:?}", node_ids);
 
-            let node = self.get_raft_handle(&C::NodeId::default())?;
+            let node = self.get_raft_handle(&<C::NodeType as NodeType>::NodeId::default())?;
             node.change_membership(node_ids.clone(), true, false).await?;
             log_index += 2;
 
@@ -297,7 +309,7 @@ where
         for id in learners.clone() {
             tracing::info!("--- add learner: {}", id);
             self.new_raft_node(id);
-            self.add_learner(C::NodeId::default(), id).await?;
+            self.add_learner(<C::NodeType as NodeType>::NodeId::default(), id).await?;
             log_index += 1;
         }
         self.wait_for_log(
@@ -312,7 +324,7 @@ where
     }
 
     /// Create and register a new Raft node bearing the given ID.
-    pub fn new_raft_node(&mut self, id: C::NodeId) {
+    pub fn new_raft_node(&mut self, id: <C::NodeType as NodeType>::NodeId) {
         let memstore = self.new_store();
         self.new_raft_node_with_sto(id, memstore)
     }
@@ -344,14 +356,17 @@ where
     }
 
     #[tracing::instrument(level = "debug", skip(self, sto))]
-    pub fn new_raft_node_with_sto(&mut self, id: C::NodeId, sto: StoreWithDefensive<C, S>) {
+    pub fn new_raft_node_with_sto(&mut self, id: <C::NodeType as NodeType>::NodeId, sto: StoreWithDefensive<C, S>) {
         let node = Raft::new(id, self.config.clone(), self.clone(), sto.clone());
         let mut rt = self.routing_table.lock().unwrap();
         rt.insert(id, (node, sto));
     }
 
     /// Remove the target node from the routing table & isolation.
-    pub fn remove_node(&mut self, id: C::NodeId) -> Option<(MemRaft<C, S>, StoreWithDefensive<C, S>)> {
+    pub fn remove_node(
+        &mut self,
+        id: <C::NodeType as NodeType>::NodeId,
+    ) -> Option<(MemRaft<C, S>, StoreWithDefensive<C, S>)> {
         let opt_handles = {
             let mut rt = self.routing_table.lock().unwrap();
             rt.remove(&id)
@@ -366,9 +381,9 @@ where
     }
 
     /// Initialize all nodes based on the config in the routing table.
-    pub async fn initialize_from_single_node(&self, node_id: C::NodeId) -> Result<()> {
+    pub async fn initialize_from_single_node(&self, node_id: <C::NodeType as NodeType>::NodeId) -> Result<()> {
         tracing::info!({ node_id = display(node_id) }, "initializing cluster from single node");
-        let members: BTreeSet<C::NodeId> = {
+        let members: BTreeSet<<C::NodeType as NodeType>::NodeId> = {
             let rt = self.routing_table.lock().unwrap();
             rt.keys().cloned().collect()
         };
@@ -380,12 +395,12 @@ where
 
     /// Isolate the network of the specified node.
     #[tracing::instrument(level = "debug", skip(self))]
-    pub fn isolate_node(&self, id: C::NodeId) {
+    pub fn isolate_node(&self, id: <C::NodeType as NodeType>::NodeId) {
         self.isolated_nodes.lock().unwrap().insert(id);
     }
 
     /// Get a payload of the latest metrics from each node in the cluster.
-    pub fn latest_metrics(&self) -> Vec<RaftMetrics<C::NodeId, C::NodeData>> {
+    pub fn latest_metrics(&self) -> Vec<RaftMetrics<C::NodeType>> {
         let rt = self.routing_table.lock().unwrap();
         let mut metrics = vec![];
         for node in rt.values() {
@@ -394,14 +409,17 @@ where
         metrics
     }
 
-    pub fn get_metrics(&self, node_id: &C::NodeId) -> Result<RaftMetrics<C::NodeId, C::NodeData>> {
+    pub fn get_metrics(&self, node_id: &<C::NodeType as NodeType>::NodeId) -> Result<RaftMetrics<C::NodeType>> {
         let node = self.get_raft_handle(node_id)?;
         let metrics = node.metrics().borrow().clone();
         Ok(metrics)
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
-    pub fn get_raft_handle(&self, node_id: &C::NodeId) -> std::result::Result<MemRaft<C, S>, NodeNotFound<C::NodeId>> {
+    pub fn get_raft_handle(
+        &self,
+        node_id: &<C::NodeType as NodeType>::NodeId,
+    ) -> std::result::Result<MemRaft<C, S>, NodeNotFound<C::NodeType>> {
         let rt = self.routing_table.lock().unwrap();
         let raft_and_sto = rt.get(node_id).ok_or_else(|| NodeNotFound {
             node_id: *node_id,
@@ -411,7 +429,7 @@ where
         Ok(r)
     }
 
-    pub fn get_storage_handle(&self, node_id: &C::NodeId) -> Result<StoreWithDefensive<C, S>> {
+    pub fn get_storage_handle(&self, node_id: &<C::NodeType as NodeType>::NodeId) -> Result<StoreWithDefensive<C, S>> {
         let rt = self.routing_table.lock().unwrap();
         let addr = rt.get(node_id).with_context(|| format!("could not find node {} in routing table", node_id))?;
         let sto = addr.clone().1;
@@ -422,20 +440,20 @@ where
     #[tracing::instrument(level = "info", skip(self, func))]
     pub async fn wait_for_metrics<T>(
         &self,
-        node_id: &C::NodeId,
+        node_id: &<C::NodeType as NodeType>::NodeId,
         func: T,
         timeout: Option<Duration>,
         msg: &str,
-    ) -> Result<RaftMetrics<C::NodeId, C::NodeData>>
+    ) -> Result<RaftMetrics<C::NodeType>>
     where
-        T: Fn(&RaftMetrics<C::NodeId, C::NodeData>) -> bool + Send,
+        T: Fn(&RaftMetrics<C::NodeType>) -> bool + Send,
     {
         let wait = self.wait(node_id, timeout);
         let rst = wait.metrics(func, format!("node-{} {}", node_id, msg)).await?;
         Ok(rst)
     }
 
-    pub fn wait(&self, node_id: &C::NodeId, timeout: Option<Duration>) -> Wait<C::NodeId, C::NodeData> {
+    pub fn wait(&self, node_id: &<C::NodeType as NodeType>::NodeId, timeout: Option<Duration>) -> Wait<C::NodeType> {
         let node = {
             let rt = self.routing_table.lock().unwrap();
             rt.get(node_id).expect("target node not found in routing table").clone().0
@@ -448,7 +466,7 @@ where
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn wait_for_log(
         &self,
-        node_ids: &BTreeSet<C::NodeId>,
+        node_ids: &BTreeSet<<C::NodeType as NodeType>::NodeId>,
         want_log: Option<u64>,
         timeout: Option<Duration>,
         msg: &str,
@@ -462,15 +480,15 @@ where
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn wait_for_members(
         &self,
-        node_ids: &BTreeSet<C::NodeId>,
-        members: BTreeSet<C::NodeId>,
+        node_ids: &BTreeSet<<C::NodeType as NodeType>::NodeId>,
+        members: BTreeSet<<C::NodeType as NodeType>::NodeId>,
         timeout: Option<Duration>,
         msg: &str,
     ) -> Result<()> {
         for i in node_ids.iter() {
             let wait = self.wait(i, timeout);
             wait.metrics(
-                |x| x.membership_config.voter_ids().collect::<BTreeSet<C::NodeId>>() == members,
+                |x| x.membership_config.voter_ids().collect::<BTreeSet<<C::NodeType as NodeType>::NodeId>>() == members,
                 msg,
             )
             .await?;
@@ -482,7 +500,7 @@ where
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn wait_for_state(
         &self,
-        node_ids: &BTreeSet<C::NodeId>,
+        node_ids: &BTreeSet<<C::NodeType as NodeType>::NodeId>,
         want_state: ServerState,
         timeout: Option<Duration>,
         msg: &str,
@@ -497,8 +515,8 @@ where
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn wait_for_snapshot(
         &self,
-        node_ids: &BTreeSet<C::NodeId>,
-        want: LogId<C::NodeId>,
+        node_ids: &BTreeSet<<C::NodeType as NodeType>::NodeId>,
+        want: LogId<<C::NodeType as NodeType>::NodeId>,
         timeout: Option<Duration>,
         msg: &str,
     ) -> Result<()> {
@@ -509,7 +527,7 @@ where
     }
 
     /// Get the ID of the current leader.
-    pub fn leader(&self) -> Option<C::NodeId> {
+    pub fn leader(&self) -> Option<<C::NodeType as NodeType>::NodeId> {
         let isolated = {
             let isolated = self.isolated_nodes.lock().unwrap();
             isolated.clone()
@@ -530,7 +548,7 @@ where
 
     /// Restore the network of the specified node.
     #[tracing::instrument(level = "debug", skip(self))]
-    pub fn restore_node(&self, id: C::NodeId) {
+    pub fn restore_node(&self, id: <C::NodeType as NodeType>::NodeId) {
         let mut nodes = self.isolated_nodes.lock().unwrap();
         nodes.remove(&id);
     }
@@ -538,15 +556,18 @@ where
     /// Bring up a new learner and add it to the leader's membership.
     pub async fn add_learner(
         &self,
-        leader: C::NodeId,
-        target: C::NodeId,
-    ) -> Result<AddLearnerResponse<C::NodeId>, AddLearnerError<C::NodeId, C::NodeData>> {
+        leader: <C::NodeType as NodeType>::NodeId,
+        target: <C::NodeType as NodeType>::NodeId,
+    ) -> Result<AddLearnerResponse<C::NodeType>, AddLearnerError<C::NodeType>> {
         let node = self.get_raft_handle(&leader).unwrap();
         node.add_learner(target, None, true).await
     }
 
     /// Send a is_leader request to the target node.
-    pub async fn is_leader(&self, target: C::NodeId) -> Result<(), CheckIsLeaderError<C::NodeId, C::NodeData>> {
+    pub async fn is_leader(
+        &self,
+        target: <C::NodeType as NodeType>::NodeId,
+    ) -> Result<(), CheckIsLeaderError<C::NodeType>> {
         let node = {
             let rt = self.routing_table.lock().unwrap();
             rt.get(&target).unwrap_or_else(|| panic!("node with ID {} does not exist", target)).clone()
@@ -557,10 +578,10 @@ where
     /// Send a client request to the target node, causing test failure on error.
     pub async fn client_request(
         &self,
-        mut target: C::NodeId,
+        mut target: <C::NodeType as NodeType>::NodeId,
         client_id: &str,
         serial: u64,
-    ) -> Result<(), ClientWriteError<C::NodeId, C::NodeData>> {
+    ) -> Result<(), ClientWriteError<C::NodeType>> {
         for ith in 0..3 {
             let req = <C::D as IntoMemClientRequest<C::D>>::make_request(client_id, serial);
             if let Err(err) = self.send_client_request(target, req).await {
@@ -595,10 +616,10 @@ where
 
     /// Send external request to the particular node.
     pub fn external_request<
-        F: FnOnce(&RaftState<C::NodeId, C::NodeData>, &mut StoreExt<C, S>, &mut TypedRaftRouter<C, S>) + Send + 'static,
+        F: FnOnce(&RaftState<C::NodeType>, &mut StoreExt<C, S>, &mut TypedRaftRouter<C, S>) + Send + 'static,
     >(
         &self,
-        target: C::NodeId,
+        target: <C::NodeType as NodeType>::NodeId,
         req: F,
     ) {
         let rt = self.routing_table.lock().unwrap();
@@ -609,7 +630,10 @@ where
     }
 
     /// Request the current leader from the target node.
-    pub async fn current_leader(&self, target: C::NodeId) -> Option<C::NodeId> {
+    pub async fn current_leader(
+        &self,
+        target: <C::NodeType as NodeType>::NodeId,
+    ) -> Option<<C::NodeType as NodeType>::NodeId> {
         let node = self.get_raft_handle(&target).unwrap();
         node.current_leader().await
     }
@@ -618,10 +642,10 @@ where
     /// Returns the number of log written to raft.
     pub async fn client_request_many(
         &self,
-        target: C::NodeId,
+        target: <C::NodeType as NodeType>::NodeId,
         client_id: &str,
         count: usize,
-    ) -> Result<u64, ClientWriteError<C::NodeId, C::NodeData>> {
+    ) -> Result<u64, ClientWriteError<C::NodeType>> {
         for idx in 0..count {
             self.client_request(target, client_id, idx as u64).await?;
         }
@@ -631,9 +655,9 @@ where
 
     async fn send_client_request(
         &self,
-        target: C::NodeId,
+        target: <C::NodeType as NodeType>::NodeId,
         req: C::D,
-    ) -> std::result::Result<C::R, ClientWriteError<C::NodeId, C::NodeData>> {
+    ) -> std::result::Result<C::R, ClientWriteError<C::NodeType>> {
         let node = {
             let rt = self.routing_table.lock().unwrap();
             rt.get(&target)
@@ -781,11 +805,11 @@ where
     pub async fn assert_storage_state_with_sto(
         &self,
         storage: &mut StoreWithDefensive<C, S>,
-        id: &C::NodeId,
+        id: &<C::NodeType as NodeType>::NodeId,
         expect_term: u64,
         expect_last_log: u64,
-        expect_voted_for: Option<C::NodeId>,
-        expect_sm_last_applied_log: LogId<C::NodeId>,
+        expect_voted_for: Option<<C::NodeType as NodeType>::NodeId>,
+        expect_sm_last_applied_log: LogId<<C::NodeType as NodeType>::NodeId>,
         expect_snapshot: &Option<(ValueTest<u64>, u64)>,
     ) -> anyhow::Result<()> {
         let last_log_id = storage.get_log_state().await?.last_log_id;
@@ -864,8 +888,8 @@ where
         &self,
         expect_term: u64,
         expect_last_log: u64,
-        expect_voted_for: Option<C::NodeId>,
-        expect_sm_last_applied_log: LogId<C::NodeId>,
+        expect_voted_for: Option<<C::NodeType as NodeType>::NodeId>,
+        expect_sm_last_applied_log: LogId<<C::NodeType as NodeType>::NodeId>,
         expect_snapshot: Option<(ValueTest<u64>, u64)>,
     ) -> anyhow::Result<()> {
         let node_ids = {
@@ -893,7 +917,11 @@ where
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
-    pub fn check_reachable(&self, id: C::NodeId, target: C::NodeId) -> std::result::Result<(), NetworkError> {
+    pub fn check_reachable(
+        &self,
+        id: <C::NodeType as NodeType>::NodeId,
+        target: <C::NodeType as NodeType>::NodeId,
+    ) -> std::result::Result<(), NetworkError> {
         let isolated = self.isolated_nodes.lock().unwrap();
 
         if isolated.contains(&target) || isolated.contains(&id) {
@@ -914,7 +942,11 @@ where
 {
     type Network = RaftRouterNetwork<C, S>;
 
-    async fn connect(&mut self, target: C::NodeId, _node: Option<&Node<C::NodeData>>) -> Self::Network {
+    async fn connect(
+        &mut self,
+        target: <C::NodeType as NodeType>::NodeId,
+        _node: Option<&Node<C::NodeType>>,
+    ) -> Self::Network {
         RaftRouterNetwork {
             target,
             owner: self.clone(),
@@ -928,7 +960,7 @@ where
     C::R: Debug,
     S: Default + Clone,
 {
-    target: C::NodeId,
+    target: <C::NodeType as NodeType>::NodeId,
     owner: TypedRaftRouter<C, S>,
 }
 
@@ -943,10 +975,8 @@ where
     async fn send_append_entries(
         &mut self,
         rpc: AppendEntriesRequest<C>,
-    ) -> std::result::Result<
-        AppendEntriesResponse<C::NodeId>,
-        RPCError<C::NodeId, C::NodeData, AppendEntriesError<C::NodeId, C::NodeData>>,
-    > {
+    ) -> std::result::Result<AppendEntriesResponse<C::NodeType>, RPCError<C::NodeType, AppendEntriesError<C::NodeType>>>
+    {
         tracing::debug!("append_entries to id={} {:?}", self.target, rpc);
         self.owner.rand_send_delay().await;
 
@@ -966,8 +996,8 @@ where
         &mut self,
         rpc: InstallSnapshotRequest<C>,
     ) -> std::result::Result<
-        InstallSnapshotResponse<C::NodeId>,
-        RPCError<C::NodeId, C::NodeData, InstallSnapshotError<C::NodeId, C::NodeData>>,
+        InstallSnapshotResponse<C::NodeType>,
+        RPCError<C::NodeType, InstallSnapshotError<C::NodeType>>,
     > {
         self.owner.rand_send_delay().await;
 
@@ -983,9 +1013,8 @@ where
     /// Send a RequestVote RPC to the target Raft node (§5).
     async fn send_vote(
         &mut self,
-        rpc: VoteRequest<C::NodeId>,
-    ) -> std::result::Result<VoteResponse<C::NodeId>, RPCError<C::NodeId, C::NodeData, VoteError<C::NodeId, C::NodeData>>>
-    {
+        rpc: VoteRequest<C::NodeType>,
+    ) -> std::result::Result<VoteResponse<C::NodeType>, RPCError<C::NodeType, VoteError<C::NodeType>>> {
         self.owner.rand_send_delay().await;
 
         self.owner.check_reachable(rpc.vote.node_id, self.target)?;
@@ -1021,7 +1050,7 @@ fn timeout() -> Option<Duration> {
 
 /// Create a blank log entry for test.
 pub fn blank<C: RaftTypeConfig>(term: u64, index: u64) -> Entry<C>
-where C::NodeId: From<u64> {
+where <C::NodeType as NodeType>::NodeId: From<u64> {
     Entry {
         log_id: LogId::new(LeaderId::new(term, 0.into()), index),
         payload: EntryPayload::Blank,

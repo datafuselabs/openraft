@@ -4,6 +4,7 @@ use std::sync::Arc;
 use async_std::net::TcpListener;
 use async_std::task;
 use openraft::Config;
+use openraft::NodeType;
 use openraft::Raft;
 
 use crate::app::ExampleApp;
@@ -26,9 +27,16 @@ pub struct ExampleNodeData {
     pub api_addr: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Deserialize, serde::Serialize)]
+pub struct ExampleNodeType {}
+impl NodeType for ExampleNodeType {
+    type NodeId = ExampleNodeId;
+    type NodeData = ExampleNodeData;
+}
+
 openraft::declare_raft_types!(
     /// Declare the type configuration for example K/V store.
-    pub ExampleTypeConfig: D = ExampleRequest, R = ExampleResponse, NodeId = ExampleNodeId, NodeData = ExampleNodeData
+    pub ExampleTypeConfig: D = ExampleRequest, R = ExampleResponse, NodeType = ExampleNodeType
 );
 
 pub type ExampleRaft = Raft<ExampleTypeConfig, ExampleNetwork, Arc<ExampleStore>>;

@@ -12,7 +12,6 @@ use crate::error::RejectVoteRequest;
 use crate::internal_server_state::InternalServerState;
 use crate::membership::EffectiveMembership;
 use crate::membership::NodeRole;
-use crate::node::NodeData;
 use crate::progress::Progress;
 use crate::raft::AppendEntriesResponse;
 use crate::raft::VoteRequest;
@@ -25,7 +24,7 @@ use crate::LogIdOptionExt;
 use crate::Membership;
 use crate::MembershipState;
 use crate::MetricsChangeFlags;
-use crate::NodeId;
+use crate::NodeType;
 use crate::Vote;
 
 /// Config for Engine
@@ -64,38 +63,34 @@ impl Default for EngineConfig {
 /// TODO: make the fields private
 #[derive(Debug, Clone, Default)]
 #[derive(PartialEq, Eq)]
-pub(crate) struct Engine<NID, ND>
-where
-    ND: NodeData,
-    NID: NodeId,
+pub(crate) struct Engine<NT>
+where NT: NodeType
 {
     /// TODO:
     #[allow(dead_code)]
-    pub(crate) id: NID,
+    pub(crate) id: NT::NodeId,
 
     pub(crate) config: EngineConfig,
 
     /// The log id upto which the current snapshot includes, inclusive, if a snapshot exists.
     ///
     /// This is primarily used in making a determination on when a compaction job needs to be triggered.
-    pub(crate) snapshot_last_log_id: Option<LogId<NID>>,
+    pub(crate) snapshot_last_log_id: Option<LogId<NT::NodeId>>,
 
     /// The state of this raft node.
-    pub(crate) state: RaftState<NID, ND>,
+    pub(crate) state: RaftState<NT>,
 
     /// Tracks what kind of metrics changed
     pub(crate) metrics_flags: MetricsChangeFlags,
 
     /// Command queue that need to be executed by `RaftRuntime`.
-    pub(crate) commands: Vec<Command<NID, ND>>,
+    pub(crate) commands: Vec<Command<NT>>,
 }
 
-impl<NID, ND> Engine<NID, ND>
-where
-    ND: NodeData,
-    NID: NodeId,
+impl<NT> Engine<NT>
+where NT: NodeType
 {
-    pub(crate) fn new(id: NID, init_state: &RaftState<NID, ND>, config: EngineConfig) -> Self {
+    pub(crate) fn new(id: NT::NodeId, init_state: &RaftState<NT>, config: EngineConfig) -> Self {
         Self {
             id,
             config,
@@ -114,10 +109,7 @@ where
     /// Appending the very first log is slightly different from appending log by a leader or follower.
     /// This step is not confined by the consensus protocol and has to be dealt with differently.
     #[tracing::instrument(level = "debug", skip(self, entries))]
-    pub(crate) fn initialize<Ent: RaftEntry<NID, ND>>(
-        &mut self,
-        entries: &mut [Ent],
-    ) -> Result<(), InitializeError<NID, ND>> {
+    pub(crate) fn initialize<Ent: RaftEntry<NT>>(&mut self, entries: &mut [Ent]) -> Result<(), InitializeError<NT>> {
         let l = entries.len();
         debug_assert_eq!(1, l);
 
@@ -177,7 +169,7 @@ where
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    pub(crate) fn handle_vote_req(&mut self, req: VoteRequest<NID>) -> VoteResponse<NID> {
+    pub(crate) fn handle_vote_req(&mut self, req: VoteRequest<NT>) -> VoteResponse<NT> {
         tracing::debug!(req = display(req.summary()), "Engine::handle_vote_req");
         tracing::debug!(
             my_vote = display(self.state.vote.summary()),
@@ -212,7 +204,7 @@ where
     }
 
     #[tracing::instrument(level = "debug", skip(self, resp))]
-    pub(crate) fn handle_vote_resp(&mut self, target: NID, resp: VoteResponse<NID>) {
+    pub(crate) fn handle_vote_resp(&mut self, target: NT::NodeId, resp: VoteResponse<NT>) {
         tracing::debug!(
             resp = display(resp.summary()),
             target = display(target),
@@ -299,7 +291,7 @@ where
     /// TODO(xp): metrics flag needs to be dealt with.
     /// TODO(xp): if vote indicates this node is not the leader, refuse append
     #[tracing::instrument(level = "debug", skip(self, entries))]
-    pub(crate) fn leader_append_entries<'a, Ent: RaftEntry<NID, ND> + 'a>(&mut self, entries: &mut [Ent]) {
+    pub(crate) fn leader_append_entries<'a, Ent: RaftEntry<NT> + 'a>(&mut self, entries: &mut [Ent]) {
         let l = entries.len();
         if l == 0 {
             return;
@@ -364,13 +356,13 @@ where
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) fn handle_append_entries_req<'a, Ent>(
         &mut self,
-        vote: &Vote<NID>,
-        prev_log_id: Option<LogId<NID>>,
+        vote: &Vote<NT::NodeId>,
+        prev_log_id: Option<LogId<NT::NodeId>>,
         entries: &[Ent],
-        leader_committed: Option<LogId<NID>>,
-    ) -> AppendEntriesResponse<NID>
+        leader_committed: Option<LogId<NT::NodeId>>,
+    ) -> AppendEntriesResponse<NT>
     where
-        Ent: RaftEntry<NID, ND> + MessageSummary<Ent> + 'a,
+        Ent: RaftEntry<NT> + MessageSummary<Ent> + 'a,
     {
         tracing::debug!(
             vote = display(vote),
@@ -427,10 +419,10 @@ where
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    pub(crate) fn follower_commit_entries<'a, Ent: RaftEntry<NID, ND> + 'a>(
+    pub(crate) fn follower_commit_entries<'a, Ent: RaftEntry<NT> + 'a>(
         &mut self,
-        leader_committed: Option<LogId<NID>>,
-        prev_log_id: Option<LogId<NID>>,
+        leader_committed: Option<LogId<NT::NodeId>>,
+        prev_log_id: Option<LogId<NT::NodeId>>,
         entries: &[Ent],
     ) {
         tracing::debug!(
@@ -463,11 +455,7 @@ where
     ///
     /// Membership config changes are also detected and applied here.
     #[tracing::instrument(level = "debug", skip(self, entries))]
-    pub(crate) fn follower_do_append_entries<'a, Ent: RaftEntry<NID, ND> + 'a>(
-        &mut self,
-        entries: &[Ent],
-        since: usize,
-    ) {
+    pub(crate) fn follower_do_append_entries<'a, Ent: RaftEntry<NT> + 'a>(&mut self, entries: &[Ent], since: usize) {
         let l = entries.len();
         if since == l {
             return;
@@ -578,7 +566,7 @@ where
     /// `max_keep` specifies the number of applied logs to keep.
     /// `max_keep==0` means every applied log can be purged.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub(crate) fn calc_purge_upto(&mut self) -> Option<LogId<NID>> {
+    pub(crate) fn calc_purge_upto(&mut self) -> Option<LogId<NT::NodeId>> {
         let st = &self.state;
         let last_applied = &st.committed;
         let max_keep = self.config.max_applied_log_to_keep;
@@ -624,7 +612,7 @@ where
 
     /// Purge log entries upto `upto`, inclusive.
     #[tracing::instrument(level = "debug", skip(self))]
-    pub(crate) fn purge_log(&mut self, upto: LogId<NID>) {
+    pub(crate) fn purge_log(&mut self, upto: LogId<NT::NodeId>) {
         let st = &mut self.state;
         let log_id = Some(upto);
 
@@ -639,7 +627,7 @@ where
 
     /// Update membership state with a committed membership config
     #[tracing::instrument(level = "debug", skip_all)]
-    pub(crate) fn update_committed_membership(&mut self, membership: EffectiveMembership<NID, ND>) {
+    pub(crate) fn update_committed_membership(&mut self, membership: EffectiveMembership<NT>) {
         tracing::debug!("update committed membership: {}", membership.summary());
 
         let server_state = self.calc_server_state();
@@ -675,7 +663,7 @@ where
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    pub(crate) fn update_effective_membership(&mut self, log_id: &LogId<NID>, m: &Membership<NID, ND>) {
+    pub(crate) fn update_effective_membership(&mut self, log_id: &LogId<NT::NodeId>, m: &Membership<NT>) {
         tracing::debug!("update effective membership: log_id:{} {}", log_id, m.summary());
 
         self.metrics_flags.set_cluster_changed();
@@ -731,7 +719,7 @@ where
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    pub(crate) fn update_progress(&mut self, node_id: NID, log_id: Option<LogId<NID>>) {
+    pub(crate) fn update_progress(&mut self, node_id: NT::NodeId, log_id: Option<LogId<NT::NodeId>>) {
         tracing::debug!("update_progress: node_id:{} log_id:{:?}", node_id, log_id);
 
         let committed = {
@@ -802,10 +790,8 @@ where
 }
 
 /// Supporting util
-impl<NID, ND> Engine<NID, ND>
-where
-    ND: NodeData,
-    NID: NodeId,
+impl<NT> Engine<NT>
+where NT: NodeType
 {
     /// Enter leader state.
     ///
@@ -858,7 +844,7 @@ where
     }
 
     /// Update effective membership config if encountering a membership config log entry.
-    fn try_update_membership<Ent: RaftEntry<NID, ND>>(&mut self, entry: &Ent) {
+    fn try_update_membership<Ent: RaftEntry<NT>>(&mut self, entry: &Ent) {
         if let Some(m) = entry.get_membership() {
             self.update_effective_membership(entry.get_log_id(), m);
         }
@@ -866,7 +852,7 @@ where
 
     /// Update membership state if membership config entries are found.
     #[allow(dead_code)]
-    fn follower_update_membership<'a, Ent: RaftEntry<NID, ND> + 'a>(
+    fn follower_update_membership<'a, Ent: RaftEntry<NT> + 'a>(
         &mut self,
         entries: impl DoubleEndedIterator<Item = &'a Ent>,
     ) {
@@ -900,9 +886,9 @@ where
     /// when conflicting logs are found.
     ///
     /// See: [Effective-membership](https://datafuselabs.github.io/openraft/effective-membership.html)
-    fn last_two_memberships<'a, Ent: RaftEntry<NID, ND> + 'a>(
+    fn last_two_memberships<'a, Ent: RaftEntry<NT> + 'a>(
         entries: impl DoubleEndedIterator<Item = &'a Ent>,
-    ) -> Vec<EffectiveMembership<NID, ND>> {
+    ) -> Vec<EffectiveMembership<NT>> {
         let mut memberships = vec![];
 
         // Find the last 2 membership config entries: the committed and the effective.
@@ -921,7 +907,7 @@ where
     /// Update membership state with the last 2 membership configs found in new log entries
     ///
     /// Return if new membership config is found
-    fn update_membership_state(&mut self, memberships: Vec<EffectiveMembership<NID, ND>>) {
+    fn update_membership_state(&mut self, memberships: Vec<EffectiveMembership<NT>>) {
         debug_assert!(self.state.membership_state.effective.log_id < memberships[0].log_id);
 
         let new_mem_state = if memberships.len() == 1 {
@@ -976,7 +962,7 @@ where
     ///
     /// It is allowed to initialize only when `last_log_id.is_none()` and `vote==(term=0, node_id=0)`.
     /// See: [Conditions for initialization](https://datafuselabs.github.io/openraft/cluster-formation.html#conditions-for-initialization)
-    fn check_initialize(&self) -> Result<(), NotAllowed<NID>> {
+    fn check_initialize(&self) -> Result<(), NotAllowed<NT>> {
         if self.state.last_log_id().is_none() && self.state.vote == Vote::default() {
             return Ok(());
         }
@@ -990,7 +976,7 @@ where
     }
 
     /// When initialize, the node that accept initialize request has to be a member of the initial config.
-    fn check_members_contain_me(&self, m: &Membership<NID, ND>) -> Result<(), NotInMembers<NID, ND>> {
+    fn check_members_contain_me(&self, m: &Membership<NT>) -> Result<(), NotInMembers<NT>> {
         if !m.is_voter(&self.id) {
             let e = NotInMembers {
                 node_id: self.id,
@@ -1004,7 +990,7 @@ where
 
     /// Find the first entry in the input that does not exist on local raft-log,
     /// by comparing the log id.
-    fn first_conflicting_index<Ent: RaftLogId<NID>>(&self, entries: &[Ent]) -> usize {
+    fn first_conflicting_index<Ent: RaftLogId<NT::NodeId>>(&self, entries: &[Ent]) -> usize {
         let l = entries.len();
 
         for (i, ent) in entries.iter().enumerate() {
@@ -1026,7 +1012,7 @@ where
         l
     }
 
-    fn assign_log_ids<'a, Ent: RaftEntry<NID, ND> + 'a>(&mut self, entries: impl Iterator<Item = &'a mut Ent>) {
+    fn assign_log_ids<'a, Ent: RaftEntry<NT> + 'a>(&mut self, entries: impl Iterator<Item = &'a mut Ent>) {
         let mut log_id = LogId::new(self.state.vote.leader_id(), self.state.last_log_id().next_index());
         for entry in entries {
             entry.set_log_id(&log_id);
@@ -1040,7 +1026,7 @@ where
     ///
     /// Grant vote if vote >= mine.
     /// Note: This method does not check last-log-id. handle-vote-request has to deal with last-log-id itself.
-    pub(crate) fn handle_vote_change(&mut self, vote: &Vote<NID>) -> Result<(), RejectVoteRequest<NID>> {
+    pub(crate) fn handle_vote_change(&mut self, vote: &Vote<NT::NodeId>) -> Result<(), RejectVoteRequest<NT>> {
         // Partial ord compare:
         // Vote does not has to be total ord.
         // `!(a >= b)` does not imply `a < b`.
@@ -1103,7 +1089,7 @@ where
         self.state.vote.node_id == self.id && self.state.vote.committed
     }
 
-    fn push_command(&mut self, cmd: Command<NID, ND>) {
+    fn push_command(&mut self, cmd: Command<NT>) {
         cmd.update_metrics_flags(&mut self.metrics_flags);
         self.commands.push(cmd)
     }

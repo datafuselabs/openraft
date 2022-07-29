@@ -13,6 +13,7 @@ use web::Json;
 
 use crate::app::ExampleApp;
 use crate::ExampleNodeId;
+use crate::ExampleNodeType;
 
 // --- Cluster management
 
@@ -62,6 +63,6 @@ pub async fn init(app: Data<ExampleApp>) -> actix_web::Result<impl Responder> {
 pub async fn metrics(app: Data<ExampleApp>) -> actix_web::Result<impl Responder> {
     let metrics = app.raft.metrics().borrow().clone();
 
-    let res: Result<RaftMetrics<ExampleNodeId, ()>, Infallible> = Ok(metrics);
+    let res: Result<RaftMetrics<ExampleNodeType>, Infallible> = Ok(metrics);
     Ok(Json(res))
 }

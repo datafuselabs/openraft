@@ -61,6 +61,19 @@ pub trait NodeData: NodeDataEssential {}
 #[cfg(not(feature = "serde"))]
 impl<T> NodeData for T where T: NodeDataEssential {}
 
+#[cfg(feature = "serde")]
+pub trait NodeType: NodeDataEssential + serde::Serialize + for<'a> serde::Deserialize<'a> + 'static {
+    type NodeId: NodeId;
+    /// Raft application level node data
+    type NodeData: NodeData;
+}
+
+#[cfg(not(feature = "serde"))]
+pub trait NodeType: NodeDataEssential + 'static {
+    type NodeId: NodeId;
+    /// Raft application level node data
+    type NodeData: NodeData;
+}
 /// Additional node information.
 ///
 /// The most common usage is to store the connecting address of a node.
@@ -69,17 +82,17 @@ impl<T> NodeData for T where T: NodeDataEssential {}
 /// An application is also free not to use this storage and implements its own node-id to address mapping.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
-pub struct Node<ND>
-where ND: NodeData
+pub struct Node<NT>
+where NT: NodeType
 {
     pub addr: String,
     /// Other User defined data.
     #[cfg_attr(feature = "serde", serde(bound = ""))]
-    pub data: ND,
+    pub data: NT::NodeData,
 }
 
-impl<ND> Node<ND>
-where ND: NodeData
+impl<NT> Node<NT>
+where NT: NodeType
 {
     pub fn new(addr: impl ToString) -> Self {
         Self {
@@ -89,8 +102,8 @@ where ND: NodeData
     }
 }
 
-impl<ND> Display for Node<ND>
-where ND: NodeData
+impl<NT> Display for Node<NT>
+where NT: NodeType
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}; {:?}", self.addr, self.data)

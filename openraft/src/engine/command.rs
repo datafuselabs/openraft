@@ -5,17 +5,16 @@ use crate::raft::VoteRequest;
 use crate::EffectiveMembership;
 use crate::LogId;
 use crate::MetricsChangeFlags;
-use crate::NodeData;
-use crate::NodeId;
+use crate::NodeType;
 use crate::ServerState;
 use crate::Vote;
 
+pub type NodeIdVec<NID> = Vec<(NID, Option<LogId<NID>>)>;
+
 /// Commands to send to `RaftRuntime` to execute, to update the application state.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Command<NID, ND>
-where
-    ND: NodeData,
-    NID: NodeId,
+pub(crate) enum Command<NT>
+where NT: NodeType
 {
     /// Update server state, e.g., Leader, Follower etc.
     /// TODO: consider removing this variant. A runtime does not need to know about this. It is only meant for metrics
@@ -26,19 +25,19 @@ where
     AppendInputEntries { range: Range<usize> },
 
     /// Replicate the committed log id to other nodes
-    ReplicateCommitted { committed: Option<LogId<NID>> },
+    ReplicateCommitted { committed: Option<LogId<NT::NodeId>> },
 
     /// Commit entries that are already in the store, upto `upto`, inclusive.
     /// And send applied result to the client that proposed the entry.
     LeaderCommit {
-        since: Option<LogId<NID>>,
-        upto: LogId<NID>,
+        since: Option<LogId<NT::NodeId>>,
+        upto: LogId<NT::NodeId>,
     },
 
     /// Commit entries that are already in the store, upto `upto`, inclusive.
     FollowerCommit {
-        since: Option<LogId<NID>>,
-        upto: LogId<NID>,
+        since: Option<LogId<NT::NodeId>>,
+        upto: LogId<NT::NodeId>,
     },
 
     /// Replicate a `range` of entries in the input buffer.
@@ -47,25 +46,25 @@ where
     /// Membership config changed, need to update replication streams.
     UpdateMembership {
         // TODO: not used yet.
-        membership: Arc<EffectiveMembership<NID, ND>>,
+        membership: Arc<EffectiveMembership<NT>>,
     },
 
     /// Membership config changed, need to update replication streams.
     UpdateReplicationStreams {
         /// Replication to remove.
-        remove: Vec<(NID, Option<LogId<NID>>)>,
+        remove: NodeIdVec<NT::NodeId>,
         /// Replication to add.
-        add: Vec<(NID, Option<LogId<NID>>)>,
+        add: NodeIdVec<NT::NodeId>,
     },
 
     /// Move the cursor pointing to an entry in the input buffer.
     MoveInputCursorBy { n: usize },
 
     /// Save vote to storage
-    SaveVote { vote: Vote<NID> },
+    SaveVote { vote: Vote<NT::NodeId> },
 
     /// Send vote to all other members
-    SendVote { vote_req: VoteRequest<NID> },
+    SendVote { vote_req: VoteRequest<NT> },
 
     /// Install a timer to trigger an election, e.g., calling `Engine::elect()` after some `timeout` which is decided
     /// by the runtime. An already installed timer should be cleared.
@@ -84,10 +83,10 @@ where
     RejectElection {},
 
     /// Purge log from the beginning to `upto`, inclusive.
-    PurgeLog { upto: LogId<NID> },
+    PurgeLog { upto: LogId<NT::NodeId> },
 
     /// Delete logs that conflict with the leader from a follower/learner since log id `since`, inclusive.
-    DeleteConflictLog { since: LogId<NID> },
+    DeleteConflictLog { since: LogId<NT::NodeId> },
 
     //
     // --- Draft unimplemented commands:
@@ -97,10 +96,8 @@ where
     BuildSnapshot {},
 }
 
-impl<NID, ND> Command<NID, ND>
-where
-    ND: NodeData,
-    NID: NodeId,
+impl<NT> Command<NT>
+where NT: NodeType
 {
     /// Update the flag of the metrics that needs to be updated when this command is executed.
     pub(crate) fn update_metrics_flags(&self, flags: &mut MetricsChangeFlags) {

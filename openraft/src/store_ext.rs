@@ -16,6 +16,7 @@ use crate::summary::MessageSummary;
 use crate::DefensiveCheck;
 use crate::Entry;
 use crate::LogId;
+use crate::NodeType;
 use crate::RaftStorage;
 use crate::RaftStorageDebug;
 use crate::RaftTypeConfig;
@@ -111,13 +112,18 @@ where
     type SnapshotBuilder = SnapshotBuilderExt<C, T>;
 
     #[tracing::instrument(level = "trace", skip(self))]
-    async fn save_vote(&mut self, vote: &Vote<C::NodeId>) -> Result<(), StorageError<C::NodeId, C::NodeData>> {
+    async fn save_vote(
+        &mut self,
+        vote: &Vote<<C::NodeType as NodeType>::NodeId>,
+    ) -> Result<(), StorageError<C::NodeType>> {
         self.defensive_incremental_vote(vote).await?;
         self.inner().save_vote(vote).await
     }
 
     #[tracing::instrument(level = "trace", skip(self))]
-    async fn read_vote(&mut self) -> Result<Option<Vote<C::NodeId>>, StorageError<C::NodeId, C::NodeData>> {
+    async fn read_vote(
+        &mut self,
+    ) -> Result<Option<Vote<<C::NodeType as NodeType>::NodeId>>, StorageError<C::NodeType>> {
         self.inner().read_vote().await
     }
 
@@ -125,8 +131,11 @@ where
     async fn last_applied_state(
         &mut self,
     ) -> Result<
-        (Option<LogId<C::NodeId>>, EffectiveMembership<C::NodeId, C::NodeData>),
-        StorageError<C::NodeId, C::NodeData>,
+        (
+            Option<LogId<<C::NodeType as NodeType>::NodeId>>,
+            EffectiveMembership<C::NodeType>,
+        ),
+        StorageError<C::NodeType>,
     > {
         self.inner().last_applied_state().await
     }
@@ -134,20 +143,23 @@ where
     #[tracing::instrument(level = "trace", skip(self))]
     async fn delete_conflict_logs_since(
         &mut self,
-        log_id: LogId<C::NodeId>,
-    ) -> Result<(), StorageError<C::NodeId, C::NodeData>> {
+        log_id: LogId<<C::NodeType as NodeType>::NodeId>,
+    ) -> Result<(), StorageError<C::NodeType>> {
         self.defensive_delete_conflict_gt_last_applied(log_id).await?;
         self.inner().delete_conflict_logs_since(log_id).await
     }
 
     #[tracing::instrument(level = "trace", skip(self))]
-    async fn purge_logs_upto(&mut self, log_id: LogId<C::NodeId>) -> Result<(), StorageError<C::NodeId, C::NodeData>> {
+    async fn purge_logs_upto(
+        &mut self,
+        log_id: LogId<<C::NodeType as NodeType>::NodeId>,
+    ) -> Result<(), StorageError<C::NodeType>> {
         self.defensive_purge_applied_le_last_applied(log_id).await?;
         self.inner().purge_logs_upto(log_id).await
     }
 
     #[tracing::instrument(level = "trace", skip(self, entries), fields(entries=%entries.summary()))]
-    async fn append_to_log(&mut self, entries: &[&Entry<C>]) -> Result<(), StorageError<C::NodeId, C::NodeData>> {
+    async fn append_to_log(&mut self, entries: &[&Entry<C>]) -> Result<(), StorageError<C::NodeType>> {
         self.defensive_nonempty_input(entries).await?;
         self.defensive_consecutive_input(entries).await?;
         self.defensive_append_log_index_is_last_plus_one(entries).await?;
@@ -157,10 +169,7 @@ where
     }
 
     #[tracing::instrument(level = "trace", skip(self, entries), fields(entries=%entries.summary()))]
-    async fn apply_to_state_machine(
-        &mut self,
-        entries: &[&Entry<C>],
-    ) -> Result<Vec<C::R>, StorageError<C::NodeId, C::NodeData>> {
+    async fn apply_to_state_machine(&mut self, entries: &[&Entry<C>]) -> Result<Vec<C::R>, StorageError<C::NodeType>> {
         self.defensive_nonempty_input(entries).await?;
         self.defensive_apply_index_is_last_applied_plus_one(entries).await?;
         self.defensive_apply_log_id_gt_last(entries).await?;
@@ -169,26 +178,23 @@ where
     }
 
     #[tracing::instrument(level = "trace", skip(self))]
-    async fn begin_receiving_snapshot(
-        &mut self,
-    ) -> Result<Box<Self::SnapshotData>, StorageError<C::NodeId, C::NodeData>> {
+    async fn begin_receiving_snapshot(&mut self) -> Result<Box<Self::SnapshotData>, StorageError<C::NodeType>> {
         self.inner().begin_receiving_snapshot().await
     }
 
     #[tracing::instrument(level = "trace", skip(self, snapshot))]
     async fn install_snapshot(
         &mut self,
-        meta: &SnapshotMeta<C::NodeId, C::NodeData>,
+        meta: &SnapshotMeta<C::NodeType>,
         snapshot: Box<Self::SnapshotData>,
-    ) -> Result<StateMachineChanges<C>, StorageError<C::NodeId, C::NodeData>> {
+    ) -> Result<StateMachineChanges<C>, StorageError<C::NodeType>> {
         self.inner().install_snapshot(meta, snapshot).await
     }
 
     #[tracing::instrument(level = "trace", skip(self))]
     async fn get_current_snapshot(
         &mut self,
-    ) -> Result<Option<Snapshot<C::NodeId, C::NodeData, Self::SnapshotData>>, StorageError<C::NodeId, C::NodeData>>
-    {
+    ) -> Result<Option<Snapshot<C::NodeType, Self::SnapshotData>>, StorageError<C::NodeType>> {
         self.inner().get_current_snapshot().await
     }
 
@@ -212,12 +218,12 @@ impl<C: RaftTypeConfig, T: RaftStorage<C>> RaftLogReader<C> for StoreExt<C, T> {
     async fn try_get_log_entries<RB: RangeBounds<u64> + Clone + Debug + Send + Sync>(
         &mut self,
         range: RB,
-    ) -> Result<Vec<Entry<C>>, StorageError<C::NodeId, C::NodeData>> {
+    ) -> Result<Vec<Entry<C>>, StorageError<C::NodeType>> {
         self.defensive_nonempty_range(range.clone())?;
         self.inner().try_get_log_entries(range).await
     }
 
-    async fn get_log_state(&mut self) -> Result<LogState<C>, StorageError<C::NodeId, C::NodeData>> {
+    async fn get_log_state(&mut self) -> Result<LogState<C>, StorageError<C::NodeType>> {
         self.defensive_no_dirty_log().await?;
         self.inner().get_log_state().await
     }
@@ -233,9 +239,7 @@ pub struct SnapshotBuilderExt<C: RaftTypeConfig, T: RaftStorage<C>> {
 #[async_trait]
 impl<C: RaftTypeConfig, T: RaftStorage<C>> RaftSnapshotBuilder<C, T::SnapshotData> for SnapshotBuilderExt<C, T> {
     #[tracing::instrument(level = "trace", skip(self))]
-    async fn build_snapshot(
-        &mut self,
-    ) -> Result<Snapshot<C::NodeId, C::NodeData, T::SnapshotData>, StorageError<C::NodeId, C::NodeData>> {
+    async fn build_snapshot(&mut self) -> Result<Snapshot<C::NodeType, T::SnapshotData>, StorageError<C::NodeType>> {
         self.inner.build_snapshot().await
     }
 }
@@ -254,12 +258,12 @@ impl<C: RaftTypeConfig, T: RaftStorage<C>> RaftLogReader<C> for LogReaderExt<C, 
     async fn try_get_log_entries<RB: RangeBounds<u64> + Clone + Debug + Send + Sync>(
         &mut self,
         range: RB,
-    ) -> Result<Vec<Entry<C>>, StorageError<C::NodeId, C::NodeData>> {
+    ) -> Result<Vec<Entry<C>>, StorageError<C::NodeType>> {
         self.defensive_nonempty_range(range.clone())?;
         self.inner.try_get_log_entries(range).await
     }
 
-    async fn get_log_state(&mut self) -> Result<LogState<C>, StorageError<C::NodeId, C::NodeData>> {
+    async fn get_log_state(&mut self) -> Result<LogState<C>, StorageError<C::NodeType>> {
         // TODO self.defensive_no_dirty_log().await?;
         // Log state via LogReader is requested exactly at one place in the replication loop.
         // Find a way how to either remove it there or assert here properly.

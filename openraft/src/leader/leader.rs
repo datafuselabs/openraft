@@ -4,7 +4,7 @@ use crate::progress::Progress;
 use crate::progress::VecProgress;
 use crate::quorum::QuorumSet;
 use crate::LogId;
-use crate::NodeId;
+use crate::NodeType;
 
 /// Leader data.
 ///
@@ -21,20 +21,20 @@ use crate::NodeId;
 /// But instead it will be able to upgrade its `leader_id` without losing leadership.
 #[derive(Clone, Debug)]
 #[derive(PartialEq, Eq)]
-pub(crate) struct Leader<NID: NodeId, QS: QuorumSet<NID>> {
+pub(crate) struct Leader<NT: NodeType, QS: QuorumSet<NT::NodeId>> {
     /// Which nodes have granted the the vote of this node.
-    pub(crate) vote_granted_by: BTreeSet<NID>,
+    pub(crate) vote_granted_by: BTreeSet<NT::NodeId>,
 
     /// Tracks the replication progress and committed index
-    pub(crate) progress: VecProgress<NID, Option<LogId<NID>>, QS>,
+    pub(crate) progress: VecProgress<NT::NodeId, Option<LogId<NT::NodeId>>, QS>,
 }
 
-impl<NID, QS> Leader<NID, QS>
+impl<NT, QS> Leader<NT, QS>
 where
-    NID: NodeId,
-    QS: QuorumSet<NID> + 'static,
+    NT: NodeType,
+    QS: QuorumSet<NT::NodeId> + 'static,
 {
-    pub(crate) fn new(quorum_set: QS, learner_ids: impl Iterator<Item = NID>) -> Self {
+    pub(crate) fn new(quorum_set: QS, learner_ids: impl Iterator<Item = NT::NodeId>) -> Self {
         Self {
             vote_granted_by: BTreeSet::new(),
             progress: VecProgress::new(quorum_set, learner_ids),
@@ -42,7 +42,7 @@ where
     }
 
     /// Update that a node has granted the vote.
-    pub(crate) fn grant_vote_by(&mut self, target: NID) {
+    pub(crate) fn grant_vote_by(&mut self, target: NT::NodeId) {
         self.vote_granted_by.insert(target);
     }
 

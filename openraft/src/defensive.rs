@@ -9,6 +9,7 @@ use crate::DefensiveError;
 use crate::Entry;
 use crate::ErrorSubject;
 use crate::LogId;
+use crate::NodeType;
 use crate::RaftStorage;
 use crate::RaftTypeConfig;
 use crate::StorageError;
@@ -28,7 +29,7 @@ pub trait DefensiveCheckBase<C: RaftTypeConfig> {
     fn defensive_nonempty_range<RB: RangeBounds<u64> + Clone + Debug + Send>(
         &self,
         range: RB,
-    ) -> Result<(), StorageError<C::NodeId, C::NodeData>> {
+    ) -> Result<(), StorageError<C::NodeType>> {
         if !self.is_defensive() {
             return Ok(());
         }
@@ -66,7 +67,7 @@ where
 {
     /// Ensure that logs that have greater index than last_applied should have greater log_id.
     /// Invariant must hold: `log.log_id.index > last_applied.index` implies `log.log_id > last_applied`.
-    async fn defensive_no_dirty_log(&mut self) -> Result<(), StorageError<C::NodeId, C::NodeData>> {
+    async fn defensive_no_dirty_log(&mut self) -> Result<(), StorageError<C::NodeType>> {
         if !self.is_defensive() {
             return Ok(());
         }
@@ -91,8 +92,8 @@ where
     /// voted_for.
     async fn defensive_incremental_vote(
         &mut self,
-        vote: &Vote<C::NodeId>,
-    ) -> Result<(), StorageError<C::NodeId, C::NodeData>> {
+        vote: &Vote<<C::NodeType as NodeType>::NodeId>,
+    ) -> Result<(), StorageError<C::NodeType>> {
         if !self.is_defensive() {
             return Ok(());
         }
@@ -117,10 +118,7 @@ where
     }
 
     /// The log entries fed into a store must be consecutive otherwise it is a bug.
-    async fn defensive_consecutive_input(
-        &self,
-        entries: &[&Entry<C>],
-    ) -> Result<(), StorageError<C::NodeId, C::NodeData>> {
+    async fn defensive_consecutive_input(&self, entries: &[&Entry<C>]) -> Result<(), StorageError<C::NodeType>> {
         if !self.is_defensive() {
             return Ok(());
         }
@@ -149,10 +147,7 @@ where
     /// Trying to feed in emtpy entries slice is an inappropriate action.
     ///
     /// The impl has to avoid this otherwise it may be a bug.
-    async fn defensive_nonempty_input(
-        &self,
-        entries: &[&Entry<C>],
-    ) -> Result<(), StorageError<C::NodeId, C::NodeData>> {
+    async fn defensive_nonempty_input(&self, entries: &[&Entry<C>]) -> Result<(), StorageError<C::NodeType>> {
         if !self.is_defensive() {
             return Ok(());
         }
@@ -168,7 +163,7 @@ where
     async fn defensive_append_log_index_is_last_plus_one(
         &mut self,
         entries: &[&Entry<C>],
-    ) -> Result<(), StorageError<C::NodeId, C::NodeData>> {
+    ) -> Result<(), StorageError<C::NodeType>> {
         if !self.is_defensive() {
             return Ok(());
         }
@@ -193,7 +188,7 @@ where
     async fn defensive_append_log_id_gt_last(
         &mut self,
         entries: &[&Entry<C>],
-    ) -> Result<(), StorageError<C::NodeId, C::NodeData>> {
+    ) -> Result<(), StorageError<C::NodeType>> {
         if !self.is_defensive() {
             return Ok(());
         }
@@ -218,8 +213,8 @@ where
 
     async fn defensive_purge_applied_le_last_applied(
         &mut self,
-        upto: LogId<C::NodeId>,
-    ) -> Result<(), StorageError<C::NodeId, C::NodeData>> {
+        upto: LogId<<C::NodeType as NodeType>::NodeId>,
+    ) -> Result<(), StorageError<C::NodeType>> {
         let (last_applied, _) = self.inner().last_applied_state().await?;
         if Some(upto.index) > last_applied.index() {
             return Err(
@@ -235,8 +230,8 @@ where
 
     async fn defensive_delete_conflict_gt_last_applied(
         &mut self,
-        since: LogId<C::NodeId>,
-    ) -> Result<(), StorageError<C::NodeId, C::NodeData>> {
+        since: LogId<<C::NodeType as NodeType>::NodeId>,
+    ) -> Result<(), StorageError<C::NodeType>> {
         let (last_applied, _) = self.inner().last_applied_state().await?;
         if Some(since.index) <= last_applied.index() {
             return Err(
@@ -254,7 +249,7 @@ where
     async fn defensive_apply_index_is_last_applied_plus_one(
         &mut self,
         entries: &[&Entry<C>],
-    ) -> Result<(), StorageError<C::NodeId, C::NodeData>> {
+    ) -> Result<(), StorageError<C::NodeType>> {
         if !self.is_defensive() {
             return Ok(());
         }
@@ -280,7 +275,7 @@ where
     async fn defensive_half_open_range<RB: RangeBounds<u64> + Clone + Debug + Send>(
         &self,
         range: RB,
-    ) -> Result<(), StorageError<C::NodeId, C::NodeData>> {
+    ) -> Result<(), StorageError<C::NodeType>> {
         if !self.is_defensive() {
             return Ok(());
         }
@@ -305,7 +300,7 @@ where
         &self,
         range: RB,
         logs: &[Entry<C>],
-    ) -> Result<(), StorageError<C::NodeId, C::NodeData>> {
+    ) -> Result<(), StorageError<C::NodeType>> {
         if !self.is_defensive() {
             return Ok(());
         }
@@ -315,10 +310,7 @@ where
     }
 
     /// The log id of the entries to apply has to be greater than the last known one.
-    async fn defensive_apply_log_id_gt_last(
-        &mut self,
-        entries: &[&Entry<C>],
-    ) -> Result<(), StorageError<C::NodeId, C::NodeData>> {
+    async fn defensive_apply_log_id_gt_last(&mut self, entries: &[&Entry<C>]) -> Result<(), StorageError<C::NodeType>> {
         if !self.is_defensive() {
             return Ok(());
         }
@@ -344,7 +336,7 @@ where
 pub fn check_range_matches_entries<C: RaftTypeConfig, RB: RangeBounds<u64> + Debug + Send>(
     range: RB,
     entries: &[Entry<C>],
-) -> Result<(), StorageError<C::NodeId, C::NodeData>> {
+) -> Result<(), StorageError<C::NodeType>> {
     let want_first = match range.start_bound() {
         Bound::Included(i) => Some(*i),
         Bound::Excluded(i) => Some(*i + 1),

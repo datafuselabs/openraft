@@ -15,6 +15,7 @@ use crate::raft::InstallSnapshotResponse;
 use crate::raft::VoteRequest;
 use crate::raft::VoteResponse;
 use crate::Node;
+use crate::NodeType;
 use crate::RaftTypeConfig;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,25 +50,19 @@ where C: RaftTypeConfig
     async fn send_append_entries(
         &mut self,
         rpc: AppendEntriesRequest<C>,
-    ) -> Result<
-        AppendEntriesResponse<C::NodeId>,
-        RPCError<C::NodeId, C::NodeData, AppendEntriesError<C::NodeId, C::NodeData>>,
-    >;
+    ) -> Result<AppendEntriesResponse<C::NodeType>, RPCError<C::NodeType, AppendEntriesError<C::NodeType>>>;
 
     /// Send an InstallSnapshot RPC to the target Raft node (§7).
     async fn send_install_snapshot(
         &mut self,
         rpc: InstallSnapshotRequest<C>,
-    ) -> Result<
-        InstallSnapshotResponse<C::NodeId>,
-        RPCError<C::NodeId, C::NodeData, InstallSnapshotError<C::NodeId, C::NodeData>>,
-    >;
+    ) -> Result<InstallSnapshotResponse<C::NodeType>, RPCError<C::NodeType, InstallSnapshotError<C::NodeType>>>;
 
     /// Send a RequestVote RPC to the target Raft node (§5).
     async fn send_vote(
         &mut self,
-        rpc: VoteRequest<C::NodeId>,
-    ) -> Result<VoteResponse<C::NodeId>, RPCError<C::NodeId, C::NodeData, VoteError<C::NodeId, C::NodeData>>>;
+        rpc: VoteRequest<C::NodeType>,
+    ) -> Result<VoteResponse<C::NodeType>, RPCError<C::NodeType, VoteError<C::NodeType>>>;
 }
 
 /// A trait defining the interface for a Raft network factory to create connections between cluster members.
@@ -91,5 +86,9 @@ where C: RaftTypeConfig
     ///
     /// The method is intentionally async to give the implementation a chance to use asynchronous
     /// sync primitives to serialize access to the common internal object, if needed.
-    async fn connect(&mut self, target: C::NodeId, node: Option<&Node<C::NodeData>>) -> Self::Network;
+    async fn connect(
+        &mut self,
+        target: <C::NodeType as NodeType>::NodeId,
+        node: Option<&Node<C::NodeType>>,
+    ) -> Self::Network;
 }

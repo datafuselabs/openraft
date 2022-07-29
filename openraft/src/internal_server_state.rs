@@ -1,9 +1,8 @@
 use std::sync::Arc;
 
 use crate::leader::Leader;
-use crate::node::NodeData;
 use crate::EffectiveMembership;
-use crate::NodeId;
+use crate::NodeType;
 
 /// In openraft there are only two state for a server:
 /// Leading(raft leader or raft candidate) and following(raft follower or raft learner):
@@ -17,15 +16,13 @@ use crate::NodeId;
 ///   become leader. A following state that is not a member is just a learner.
 #[derive(Clone, Debug)]
 #[derive(PartialEq, Eq)]
-pub(crate) enum InternalServerState<NID, ND>
-where
-    NID: NodeId,
-    ND: NodeData,
+pub(crate) enum InternalServerState<NT>
+where NT: NodeType
 {
     /// Leader or candidate.
     ///
     /// `vote.committed==true` means it is a leader.
-    Leading(Leader<NID, Arc<EffectiveMembership<NID, ND>>>),
+    Leading(Leader<NT, Arc<EffectiveMembership<NT>>>),
 
     /// Follower or learner.
     ///
@@ -33,29 +30,25 @@ where
     Following,
 }
 
-impl<NID, ND> Default for InternalServerState<NID, ND>
-where
-    NID: NodeId,
-    ND: NodeData,
+impl<NT> Default for InternalServerState<NT>
+where NT: NodeType
 {
     fn default() -> Self {
         Self::Following
     }
 }
 
-impl<NID, ND> InternalServerState<NID, ND>
-where
-    NID: NodeId,
-    ND: NodeData,
+impl<NT> InternalServerState<NT>
+where NT: NodeType
 {
-    pub(crate) fn leading(&self) -> Option<&Leader<NID, Arc<EffectiveMembership<NID, ND>>>> {
+    pub(crate) fn leading(&self) -> Option<&Leader<NT, Arc<EffectiveMembership<NT>>>> {
         match self {
             InternalServerState::Leading(l) => Some(l),
             InternalServerState::Following => None,
         }
     }
 
-    pub(crate) fn leading_mut(&mut self) -> Option<&mut Leader<NID, Arc<EffectiveMembership<NID, ND>>>> {
+    pub(crate) fn leading_mut(&mut self) -> Option<&mut Leader<NT, Arc<EffectiveMembership<NT>>>> {
         match self {
             InternalServerState::Leading(l) => Some(l),
             InternalServerState::Following => None,

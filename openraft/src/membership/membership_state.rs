@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
-use crate::node::NodeData;
 use crate::EffectiveMembership;
-use crate::NodeId;
+use crate::NodeType;
 
 /// The state of membership configs a raft node needs to know.
 ///
@@ -28,23 +27,19 @@ use crate::NodeId;
 // Thus a raft node will only need to store at most two recent membership logs.
 #[derive(Debug, Clone, Default)]
 #[derive(PartialEq, Eq)]
-pub struct MembershipState<NID, ND>
-where
-    NID: NodeId,
-    ND: NodeData,
+pub struct MembershipState<NT>
+where NT: NodeType
 {
-    pub committed: Arc<EffectiveMembership<NID, ND>>,
+    pub committed: Arc<EffectiveMembership<NT>>,
 
     // Using `Arc` because the effective membership will be copied to RaftMetrics frequently.
-    pub effective: Arc<EffectiveMembership<NID, ND>>,
+    pub effective: Arc<EffectiveMembership<NT>>,
 }
 
-impl<NID, ND> MembershipState<NID, ND>
-where
-    NID: NodeId,
-    ND: NodeData,
+impl<NT> MembershipState<NT>
+where NT: NodeType
 {
-    pub(crate) fn is_voter(&self, id: &NID) -> bool {
+    pub(crate) fn is_voter(&self, id: &NT::NodeId) -> bool {
         self.effective.membership.is_voter(id)
     }
 }

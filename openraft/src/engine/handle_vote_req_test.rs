@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use maplit::btreeset;
 
+use super::calc_purge_upto_test::TestNodeType;
 use crate::core::ServerState;
 use crate::engine::Command;
 use crate::engine::Engine;
@@ -22,12 +23,12 @@ fn log_id(term: u64, index: u64) -> LogId<u64> {
     }
 }
 
-fn m01() -> Membership<u64, ()> {
-    Membership::<u64, ()>::new(vec![btreeset! {0,1}], None)
+fn m01() -> Membership<TestNodeType> {
+    Membership::<TestNodeType>::new(vec![btreeset! {0,1}], None)
 }
 
-fn eng() -> Engine<u64, ()> {
-    let mut eng = Engine::<u64, ()>::default();
+fn eng() -> Engine<TestNodeType> {
+    let mut eng = Engine::<TestNodeType>::default();
     eng.state.vote = Vote::new(2, 1);
     eng.state.server_state = ServerState::Candidate;
     eng.state.membership_state.effective = Arc::new(EffectiveMembership::new(Some(log_id(1, 1)), m01()));

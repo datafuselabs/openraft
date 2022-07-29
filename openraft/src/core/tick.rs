@@ -11,7 +11,7 @@ use tracing::Span;
 use tracing_futures::Instrument;
 
 use crate::raft::RaftMsg;
-use crate::NodeId;
+use crate::NodeType;
 use crate::RaftNetworkFactory;
 use crate::RaftStorage;
 use crate::RaftTypeConfig;
@@ -22,18 +22,18 @@ use crate::Vote;
 /// If the vote on a node changes, the timeout belonging to a previous vote becomes invalid.
 /// See: https://datafuselabs.github.io/openraft/vote.html
 #[derive(Debug)]
-pub(crate) struct VoteWiseTime<NID: NodeId> {
-    pub(crate) vote: Vote<NID>,
+pub(crate) struct VoteWiseTime<NT: NodeType> {
+    pub(crate) vote: Vote<NT::NodeId>,
     pub(crate) time: Instant,
 }
 
-impl<NID: NodeId> VoteWiseTime<NID> {
-    pub(crate) fn new(vote: Vote<NID>, time: Instant) -> Self {
+impl<NT: NodeType> VoteWiseTime<NT> {
+    pub(crate) fn new(vote: Vote<NT::NodeId>, time: Instant) -> Self {
         Self { vote, time }
     }
 
     /// Return the time if vote does not change since it is set.
-    pub(crate) fn get_time(&self, current_vote: &Vote<NID>) -> Option<Instant> {
+    pub(crate) fn get_time(&self, current_vote: &Vote<NT::NodeId>) -> Option<Instant> {
         debug_assert!(&self.vote <= current_vote);
 
         if &self.vote == current_vote {

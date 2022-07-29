@@ -13,6 +13,7 @@ use tide::StatusCode;
 use crate::app::ExampleApp;
 use crate::ExampleNodeData;
 use crate::ExampleNodeId;
+use crate::ExampleNodeType;
 use crate::Server;
 
 // --- Cluster management
@@ -62,6 +63,6 @@ async fn init(req: Request<Arc<ExampleApp>>) -> tide::Result {
 async fn metrics(req: Request<Arc<ExampleApp>>) -> tide::Result {
     let metrics = req.state().raft.metrics().borrow().clone();
 
-    let res: Result<RaftMetrics<ExampleNodeId, ExampleNodeData>, Infallible> = Ok(metrics);
+    let res: Result<RaftMetrics<ExampleNodeType>, Infallible> = Ok(metrics);
     Ok(Response::builder(StatusCode::Ok).body(Body::from_json(&res)?).build())
 }

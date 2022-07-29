@@ -36,8 +36,8 @@ use rocksdb::DB;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::ExampleNodeData;
 use crate::ExampleNodeId;
+use crate::ExampleNodeType;
 use crate::ExampleTypeConfig;
 
 /**
@@ -66,7 +66,7 @@ pub struct ExampleResponse {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ExampleSnapshot {
-    pub meta: SnapshotMeta<ExampleNodeId, ExampleNodeData>,
+    pub meta: SnapshotMeta<ExampleNodeType>,
 
     /// The data of the state machine at the time of this snapshot.
     pub data: Vec<u8>,
@@ -83,7 +83,7 @@ pub struct SerializableExampleStateMachine {
     pub last_applied_log: Option<LogId<ExampleNodeId>>,
 
     // TODO: it should not be Option.
-    pub last_membership: EffectiveMembership<ExampleNodeId, ExampleNodeData>,
+    pub last_membership: EffectiveMembership<ExampleNodeType>,
 
     /// Application data.
     pub data: BTreeMap<String, String>,
@@ -119,15 +119,15 @@ pub struct ExampleStateMachine {
     pub db: Arc<rocksdb::DB>,
 }
 
-fn sm_r_err<E: Error + 'static>(e: E) -> StorageError<ExampleNodeId, ExampleNodeData> {
+fn sm_r_err<E: Error + 'static>(e: E) -> StorageError<ExampleNodeType> {
     StorageIOError::new(ErrorSubject::StateMachine, ErrorVerb::Read, AnyError::new(&e)).into()
 }
-fn sm_w_err<E: Error + 'static>(e: E) -> StorageError<ExampleNodeId, ExampleNodeData> {
+fn sm_w_err<E: Error + 'static>(e: E) -> StorageError<ExampleNodeType> {
     StorageIOError::new(ErrorSubject::StateMachine, ErrorVerb::Write, AnyError::new(&e)).into()
 }
 
 impl ExampleStateMachine {
-    fn get_last_membership(&self) -> StorageResult<EffectiveMembership<ExampleNodeId, ExampleNodeData>> {
+    fn get_last_membership(&self) -> StorageResult<EffectiveMembership<ExampleNodeType>> {
         self.db
             .get_cf(
                 self.db.cf_handle("state_machine").expect("cf_handle"),
@@ -140,10 +140,7 @@ impl ExampleStateMachine {
                     .unwrap_or_else(|| Ok(EffectiveMembership::default()))
             })
     }
-    fn set_last_membership(
-        &self,
-        membership: EffectiveMembership<ExampleNodeId, ExampleNodeData>,
-    ) -> StorageResult<()> {
+    fn set_last_membership(&self, membership: EffectiveMembership<ExampleNodeType>) -> StorageResult<()> {
         self.db
             .put_cf(
                 self.db.cf_handle("state_machine").expect("cf_handle"),
@@ -213,7 +210,7 @@ pub struct ExampleStore {
     /// The Raft state machine.
     pub state_machine: RwLock<ExampleStateMachine>,
 }
-type StorageResult<T> = Result<T, StorageError<ExampleNodeId, ExampleNodeData>>;
+type StorageResult<T> = Result<T, StorageError<ExampleNodeType>>;
 
 /// converts an id to a byte vector for storing in the database.
 /// Note that we're using big endian encoding to ensure correct sorting of keys
@@ -364,8 +361,7 @@ impl RaftSnapshotBuilder<ExampleTypeConfig, Cursor<Vec<u8>>> for Arc<ExampleStor
     #[tracing::instrument(level = "trace", skip(self))]
     async fn build_snapshot(
         &mut self,
-    ) -> Result<Snapshot<ExampleNodeId, ExampleNodeData, Cursor<Vec<u8>>>, StorageError<ExampleNodeId, ExampleNodeData>>
-    {
+    ) -> Result<Snapshot<ExampleNodeType, Cursor<Vec<u8>>>, StorageError<ExampleNodeType>> {
         let data;
         let last_applied_log;
         let last_membership;
@@ -423,14 +419,11 @@ impl RaftStorage<ExampleTypeConfig> for Arc<ExampleStore> {
     type SnapshotBuilder = Self;
 
     #[tracing::instrument(level = "trace", skip(self))]
-    async fn save_vote(
-        &mut self,
-        vote: &Vote<ExampleNodeId>,
-    ) -> Result<(), StorageError<ExampleNodeId, ExampleNodeData>> {
+    async fn save_vote(&mut self, vote: &Vote<ExampleNodeId>) -> Result<(), StorageError<ExampleNodeType>> {
         self.set_vote_(vote)
     }
 
-    async fn read_vote(&mut self) -> Result<Option<Vote<ExampleNodeId>>, StorageError<ExampleNodeId, ExampleNodeData>> {
+    async fn read_vote(&mut self) -> Result<Option<Vote<ExampleNodeId>>, StorageError<ExampleNodeType>> {
         self.get_vote_()
     }
 
@@ -463,10 +456,7 @@ impl RaftStorage<ExampleTypeConfig> for Arc<ExampleStore> {
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
-    async fn purge_logs_upto(
-        &mut self,
-        log_id: LogId<ExampleNodeId>,
-    ) -> Result<(), StorageError<ExampleNodeId, ExampleNodeData>> {
+    async fn purge_logs_upto(&mut self, log_id: LogId<ExampleNodeId>) -> Result<(), StorageError<ExampleNodeType>> {
         tracing::debug!("delete_log: [0, {:?}]", log_id);
 
         self.set_last_purged_(log_id)?;
@@ -479,13 +469,8 @@ impl RaftStorage<ExampleTypeConfig> for Arc<ExampleStore> {
 
     async fn last_applied_state(
         &mut self,
-    ) -> Result<
-        (
-            Option<LogId<ExampleNodeId>>,
-            EffectiveMembership<ExampleNodeId, ExampleNodeData>,
-        ),
-        StorageError<ExampleNodeId, ExampleNodeData>,
-    > {
+    ) -> Result<(Option<LogId<ExampleNodeId>>, EffectiveMembership<ExampleNodeType>), StorageError<ExampleNodeType>>
+    {
         let state_machine = self.state_machine.read().await;
         Ok((
             state_machine.get_last_applied_log()?,
@@ -497,7 +482,7 @@ impl RaftStorage<ExampleTypeConfig> for Arc<ExampleStore> {
     async fn apply_to_state_machine(
         &mut self,
         entries: &[&Entry<ExampleTypeConfig>],
-    ) -> Result<Vec<ExampleResponse>, StorageError<ExampleNodeId, ExampleNodeData>> {
+    ) -> Result<Vec<ExampleResponse>, StorageError<ExampleNodeType>> {
         let mut res = Vec::with_capacity(entries.len());
 
         let sm = self.state_machine.write().await;
@@ -530,18 +515,16 @@ impl RaftStorage<ExampleTypeConfig> for Arc<ExampleStore> {
     }
 
     #[tracing::instrument(level = "trace", skip(self))]
-    async fn begin_receiving_snapshot(
-        &mut self,
-    ) -> Result<Box<Self::SnapshotData>, StorageError<ExampleNodeId, ExampleNodeData>> {
+    async fn begin_receiving_snapshot(&mut self) -> Result<Box<Self::SnapshotData>, StorageError<ExampleNodeType>> {
         Ok(Box::new(Cursor::new(Vec::new())))
     }
 
     #[tracing::instrument(level = "trace", skip(self, snapshot))]
     async fn install_snapshot(
         &mut self,
-        meta: &SnapshotMeta<ExampleNodeId, ExampleNodeData>,
+        meta: &SnapshotMeta<ExampleNodeType>,
         snapshot: Box<Self::SnapshotData>,
-    ) -> Result<StateMachineChanges<ExampleTypeConfig>, StorageError<ExampleNodeId, ExampleNodeData>> {
+    ) -> Result<StateMachineChanges<ExampleTypeConfig>, StorageError<ExampleNodeType>> {
         tracing::info!(
             { snapshot_size = snapshot.get_ref().len() },
             "decoding snapshot for installation"
@@ -576,10 +559,7 @@ impl RaftStorage<ExampleTypeConfig> for Arc<ExampleStore> {
     #[tracing::instrument(level = "trace", skip(self))]
     async fn get_current_snapshot(
         &mut self,
-    ) -> Result<
-        Option<Snapshot<ExampleNodeId, ExampleNodeData, Self::SnapshotData>>,
-        StorageError<ExampleNodeId, ExampleNodeData>,
-    > {
+    ) -> Result<Option<Snapshot<ExampleNodeType, Self::SnapshotData>>, StorageError<ExampleNodeType>> {
         match ExampleStore::get_current_snapshot_(self)? {
             Some(snapshot) => {
                 let data = snapshot.data.clone();

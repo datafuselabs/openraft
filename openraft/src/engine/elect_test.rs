@@ -3,6 +3,7 @@ use std::sync::Arc;
 use maplit::btreeset;
 use pretty_assertions::assert_eq;
 
+use super::calc_purge_upto_test::TestNodeType;
 use crate::core::ServerState;
 use crate::engine::Command;
 use crate::engine::Engine;
@@ -22,16 +23,16 @@ fn log_id(term: u64, index: u64) -> LogId<u64> {
     }
 }
 
-fn m1() -> Membership<u64, ()> {
-    Membership::<u64, ()>::new(vec![btreeset! {1}], None)
+fn m1() -> Membership<TestNodeType> {
+    Membership::<TestNodeType>::new(vec![btreeset! {1}], None)
 }
 
-fn m12() -> Membership<u64, ()> {
-    Membership::<u64, ()>::new(vec![btreeset! {1,2}], None)
+fn m12() -> Membership<TestNodeType> {
+    Membership::<TestNodeType>::new(vec![btreeset! {1,2}], None)
 }
 
-fn eng() -> Engine<u64, ()> {
-    Engine::<u64, ()>::default()
+fn eng() -> Engine<TestNodeType> {
+    Engine::<TestNodeType>::default()
 }
 
 #[test]

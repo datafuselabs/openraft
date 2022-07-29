@@ -1,6 +1,7 @@
 use crate::engine::Command;
 use crate::raft_types::RaftLogId;
 use crate::Entry;
+use crate::NodeType;
 use crate::RaftTypeConfig;
 use crate::StorageError;
 
@@ -76,9 +77,9 @@ pub(crate) trait RaftRuntime<C: RaftTypeConfig> {
         &mut self,
         input_entries: &'e [Ent],
         curr: &mut usize,
-        cmd: &Command<C::NodeId, C::NodeData>,
-    ) -> Result<(), StorageError<C::NodeId, C::NodeData>>
+        cmd: &Command<C::NodeType>,
+    ) -> Result<(), StorageError<C::NodeType>>
     where
-        Ent: RaftLogId<C::NodeId> + Sync + Send + 'e,
+        Ent: RaftLogId<<C::NodeType as NodeType>::NodeId> + Sync + Send + 'e,
         &'e Ent: Into<Entry<C>>;
 }

@@ -19,8 +19,8 @@ use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::ExampleNodeData;
 use crate::ExampleNodeId;
+use crate::ExampleNodeType;
 use crate::ExampleRequest;
 use crate::ExampleTypeConfig;
 
@@ -56,17 +56,15 @@ impl ExampleClient {
     pub async fn write(
         &self,
         req: &ExampleRequest,
-    ) -> Result<
-        ClientWriteResponse<ExampleTypeConfig>,
-        RPCError<ExampleNodeId, ExampleNodeData, ClientWriteError<ExampleNodeId, ExampleNodeData>>,
-    > {
+    ) -> Result<ClientWriteResponse<ExampleTypeConfig>, RPCError<ExampleNodeType, ClientWriteError<ExampleNodeType>>>
+    {
         self.send_rpc_to_leader("api/write", Some(req)).await
     }
 
     /// Read value by key, in an inconsistent mode.
     ///
     /// This method may return stale value because it does not force to read on a legal leader.
-    pub async fn read(&self, req: &String) -> Result<String, RPCError<ExampleNodeId, ExampleNodeData, Infallible>> {
+    pub async fn read(&self, req: &String) -> Result<String, RPCError<ExampleNodeType, Infallible>> {
         self.do_send_rpc_to_leader("api/read", Some(req)).await
     }
 
@@ -76,8 +74,7 @@ impl ExampleClient {
     pub async fn consistent_read(
         &self,
         req: &String,
-    ) -> Result<String, RPCError<ExampleNodeId, ExampleNodeData, CheckIsLeaderError<ExampleNodeId, ExampleNodeData>>>
-    {
+    ) -> Result<String, RPCError<ExampleNodeType, CheckIsLeaderError<ExampleNodeType>>> {
         self.do_send_rpc_to_leader("api/consistent_read", Some(req)).await
     }
 
@@ -89,9 +86,7 @@ impl ExampleClient {
     /// With a initialized cluster, new node can be added with [`write`].
     /// Then setup replication with [`add_learner`].
     /// Then make the new node a member with [`change_membership`].
-    pub async fn init(
-        &self,
-    ) -> Result<(), RPCError<ExampleNodeId, ExampleNodeData, InitializeError<ExampleNodeId, ExampleNodeData>>> {
+    pub async fn init(&self) -> Result<(), RPCError<ExampleNodeType, InitializeError<ExampleNodeType>>> {
         self.do_send_rpc_to_leader("cluster/init", Some(&Empty {})).await
     }
 
@@ -101,10 +96,7 @@ impl ExampleClient {
     pub async fn add_learner(
         &self,
         req: (ExampleNodeId, String, String),
-    ) -> Result<
-        AddLearnerResponse<ExampleNodeId>,
-        RPCError<ExampleNodeId, ExampleNodeData, AddLearnerError<ExampleNodeId, ExampleNodeData>>,
-    > {
+    ) -> Result<AddLearnerResponse<ExampleNodeType>, RPCError<ExampleNodeType, AddLearnerError<ExampleNodeType>>> {
         self.send_rpc_to_leader("cluster/add-learner", Some(&req)).await
     }
 
@@ -115,10 +107,8 @@ impl ExampleClient {
     pub async fn change_membership(
         &self,
         req: &BTreeSet<ExampleNodeId>,
-    ) -> Result<
-        ClientWriteResponse<ExampleTypeConfig>,
-        RPCError<ExampleNodeId, ExampleNodeData, ClientWriteError<ExampleNodeId, ExampleNodeData>>,
-    > {
+    ) -> Result<ClientWriteResponse<ExampleTypeConfig>, RPCError<ExampleNodeType, ClientWriteError<ExampleNodeType>>>
+    {
         self.send_rpc_to_leader("cluster/change-membership", Some(req)).await
     }
 
@@ -127,9 +117,7 @@ impl ExampleClient {
     /// Metrics contains various information about the cluster, such as current leader,
     /// membership config, replication status etc.
     /// See [`RaftMetrics`].
-    pub async fn metrics(
-        &self,
-    ) -> Result<RaftMetrics<ExampleNodeId, ExampleNodeData>, RPCError<ExampleNodeId, ExampleNodeData, Infallible>> {
+    pub async fn metrics(&self) -> Result<RaftMetrics<ExampleNodeType>, RPCError<ExampleNodeType, Infallible>> {
         self.do_send_rpc_to_leader("cluster/metrics", None::<&()>).await
     }
 
@@ -144,7 +132,7 @@ impl ExampleClient {
         &self,
         uri: &str,
         req: Option<&Req>,
-    ) -> Result<Resp, RPCError<ExampleNodeId, ExampleNodeData, Err>>
+    ) -> Result<Resp, RPCError<ExampleNodeType, Err>>
     where
         Req: Serialize + 'static,
         Resp: Serialize + DeserializeOwned,
@@ -189,22 +177,17 @@ impl ExampleClient {
         &self,
         uri: &str,
         req: Option<&Req>,
-    ) -> Result<Resp, RPCError<ExampleNodeId, ExampleNodeData, Err>>
+    ) -> Result<Resp, RPCError<ExampleNodeType, Err>>
     where
         Req: Serialize + 'static,
         Resp: Serialize + DeserializeOwned,
-        Err: std::error::Error
-            + Serialize
-            + DeserializeOwned
-            + TryInto<ForwardToLeader<ExampleNodeId, ExampleNodeData>>
-            + Clone,
+        Err: std::error::Error + Serialize + DeserializeOwned + TryInto<ForwardToLeader<ExampleNodeType>> + Clone,
     {
         // Retry at most 3 times to find a valid leader.
         let mut n_retry = 3;
 
         loop {
-            let res: Result<Resp, RPCError<ExampleNodeId, ExampleNodeData, Err>> =
-                self.do_send_rpc_to_leader(uri, req).await;
+            let res: Result<Resp, RPCError<ExampleNodeType, Err>> = self.do_send_rpc_to_leader(uri, req).await;
 
             let rpc_err = match res {
                 Ok(x) => return Ok(x),
@@ -212,9 +195,8 @@ impl ExampleClient {
             };
 
             if let RPCError::RemoteError(remote_err) = &rpc_err {
-                let forward_err_res = <Err as TryInto<ForwardToLeader<ExampleNodeId, ExampleNodeData>>>::try_into(
-                    remote_err.source.clone(),
-                );
+                let forward_err_res =
+                    <Err as TryInto<ForwardToLeader<ExampleNodeType>>>::try_into(remote_err.source.clone());
 
                 if let Ok(ForwardToLeader {
                     leader_id: Some(leader_id),

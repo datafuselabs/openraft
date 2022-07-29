@@ -89,7 +89,7 @@ async fn test_cluster() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(&vec![vec![1]], x.membership_config.get_joint_config());
 
     let nodes_in_cluster =
-        x.membership_config.nodes().map(|(nid, node)| (*nid, node.clone())).collect::<BTreeMap<_, _>>();
+        x.membership_config.nodes().map(|(mid, node)| (*mid, node.clone())).collect::<BTreeMap<_, _>>();
     assert_eq!(
         btreemap! {
             1 => Some(Node{addr: get_rpc_addr(1), data: ExampleNodeData{api_addr: get_addr(1)}}),

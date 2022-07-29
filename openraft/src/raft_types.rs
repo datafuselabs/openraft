@@ -4,6 +4,7 @@ use std::fmt::Formatter;
 use crate::LeaderId;
 use crate::MessageSummary;
 use crate::NodeId;
+use crate::NodeType;
 use crate::RaftTypeConfig;
 
 /// The identity of a raft log.
@@ -196,6 +197,6 @@ impl MetricsChangeFlags {
 /// E.g. when applying a log to state machine, or installing a state machine from snapshot.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StateMachineChanges<C: RaftTypeConfig> {
-    pub last_applied: LogId<C::NodeId>,
+    pub last_applied: LogId<<C::NodeType as NodeType>::NodeId>,
     pub is_snapshot: bool,
 }

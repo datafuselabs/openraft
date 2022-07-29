@@ -6,6 +6,7 @@ use actix_web::web::Data;
 use actix_web::App;
 use actix_web::HttpServer;
 use openraft::Config;
+use openraft::NodeType;
 use openraft::Raft;
 
 use crate::app::ExampleApp;
@@ -23,10 +24,18 @@ pub mod network;
 pub mod store;
 
 pub type ExampleNodeId = u64;
+pub type ExampleNodeData = ();
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Deserialize, serde::Serialize)]
+pub struct ExampleNodeType {}
+impl NodeType for ExampleNodeType {
+    type NodeId = ExampleNodeId;
+    type NodeData = ExampleNodeData;
+}
 
 openraft::declare_raft_types!(
     /// Declare the type configuration for example K/V store.
-    pub ExampleTypeConfig: D = ExampleRequest, R = ExampleResponse, NodeId = ExampleNodeId, NodeData = ()
+    pub ExampleTypeConfig: D = ExampleRequest, R = ExampleResponse, NodeType = ExampleNodeType
 );
 
 pub type ExampleRaft = Raft<ExampleTypeConfig, ExampleNetwork, Arc<ExampleStore>>;

@@ -13,9 +13,7 @@ use crate::NodeId;
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 // Clear the bound so that serde will generate required bounds.
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize), serde(bound = ""))]
-pub struct LeaderId<NID>
-where NID: NodeId
-{
+pub struct LeaderId<NID: NodeId> {
     pub term: u64,
     pub node_id: NID,
 }

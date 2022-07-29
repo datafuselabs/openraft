@@ -62,8 +62,6 @@ use crate::raft::AddLearnerResponse;
 use crate::raft::AppendEntriesRequest;
 use crate::raft::AppendEntriesResponse;
 use crate::raft::ClientWriteResponse;
-use crate::raft::ClientWriteTx;
-use crate::raft::RaftAddLearnerTx;
 use crate::raft::RaftMsg;
 use crate::raft::RaftRespTx;
 use crate::raft::VoteRequest;
@@ -86,6 +84,7 @@ use crate::LogId;
 use crate::Membership;
 use crate::MessageSummary;
 use crate::Node;
+use crate::NodeType;
 use crate::RPCTypes;
 use crate::RaftNetwork;
 use crate::RaftNetworkFactory;
@@ -100,15 +99,15 @@ use crate::Vote;
 /// It is created when RaftCore enters leader state, and will be dropped when it quits leader state.
 pub(crate) struct LeaderData<C: RaftTypeConfig> {
     /// Channels to send result back to client when logs are committed.
-    pub(crate) client_resp_channels: BTreeMap<u64, ClientWriteTx<C, C::NodeId, C::NodeData>>,
+    pub(crate) client_resp_channels: BTreeMap<u64, RaftRespTx<ClientWriteResponse<C>, ClientWriteError<C::NodeType>>>,
 
     /// A mapping of node IDs the replication state of the target node.
     // TODO(xp): make it a field of RaftCore. it does not have to belong to leader.
     //           It requires the Engine to emit correct add/remove replication commands
-    pub(super) nodes: BTreeMap<C::NodeId, ReplicationStream<C::NodeId>>,
+    pub(super) nodes: BTreeMap<<C::NodeType as NodeType>::NodeId, ReplicationStream<C::NodeType>>,
 
     /// The metrics of all replication streams
-    pub(crate) replication_metrics: Versioned<ReplicationMetrics<C::NodeId>>,
+    pub(crate) replication_metrics: Versioned<ReplicationMetrics<C::NodeType>>,
 }
 
 impl<C: RaftTypeConfig> LeaderData<C> {
@@ -124,7 +123,7 @@ impl<C: RaftTypeConfig> LeaderData<C> {
 /// The core type implementing the Raft protocol.
 pub struct RaftCore<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> {
     /// This node's ID.
-    pub(crate) id: C::NodeId,
+    pub(crate) id: <C::NodeType as NodeType>::NodeId,
 
     /// This node's runtime config.
     pub(crate) config: Arc<Config>,
@@ -135,7 +134,7 @@ pub struct RaftCore<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<
     /// The `RaftStorage` implementation.
     pub(crate) storage: S,
 
-    pub(crate) engine: Engine<C::NodeId, C::NodeData>,
+    pub(crate) engine: Engine<C::NodeType>,
 
     pub(crate) leader_data: Option<LeaderData<C>>,
 
@@ -146,30 +145,30 @@ pub struct RaftCore<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<
     pub(crate) last_heartbeat: Option<Instant>,
 
     /// The time to elect if a follower does not receive any append-entry message.
-    pub(crate) next_election_time: VoteWiseTime<C::NodeId>,
+    pub(crate) next_election_time: VoteWiseTime<C::NodeType>,
 
     pub(crate) tx_api: mpsc::UnboundedSender<RaftMsg<C, N, S>>,
     pub(crate) rx_api: mpsc::UnboundedReceiver<RaftMsg<C, N, S>>,
 
-    tx_metrics: watch::Sender<RaftMetrics<C::NodeId, C::NodeData>>,
+    tx_metrics: watch::Sender<RaftMetrics<C::NodeType>>,
 
     pub(crate) rx_shutdown: oneshot::Receiver<()>,
 
     pub(crate) span: Span,
 }
 
-pub(crate) type RaftSpawnHandle<NID, ND> = JoinHandle<Result<(), Fatal<NID, ND>>>;
+pub(crate) type RaftSpawnHandle<NT> = JoinHandle<Result<(), Fatal<NT>>>;
 impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C, N, S> {
     pub(crate) fn spawn(
-        id: C::NodeId,
+        id: <C::NodeType as NodeType>::NodeId,
         config: Arc<Config>,
         network: N,
         storage: S,
         tx_api: mpsc::UnboundedSender<RaftMsg<C, N, S>>,
         rx_api: mpsc::UnboundedReceiver<RaftMsg<C, N, S>>,
-        tx_metrics: watch::Sender<RaftMetrics<C::NodeId, C::NodeData>>,
+        tx_metrics: watch::Sender<RaftMetrics<C::NodeType>>,
         rx_shutdown: oneshot::Receiver<()>,
-    ) -> RaftSpawnHandle<C::NodeId, C::NodeData> {
+    ) -> RaftSpawnHandle<C::NodeType> {
         let span = tracing::span!(
             parent: tracing::Span::current(),
             Level::DEBUG,
@@ -205,7 +204,7 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
     }
 
     /// The main loop of the Raft protocol.
-    async fn main(mut self) -> Result<(), Fatal<C::NodeId, C::NodeData>> {
+    async fn main(mut self) -> Result<(), Fatal<C::NodeType>> {
         let span = tracing::span!(parent: &self.span, Level::DEBUG, "main");
         let res = self.do_main().instrument(span).await;
         match res {
@@ -223,7 +222,7 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
     }
 
     #[tracing::instrument(level="trace", skip(self), fields(id=display(self.id), cluster=%self.config.cluster_name))]
-    async fn do_main(&mut self) -> Result<(), Fatal<C::NodeId, C::NodeData>> {
+    async fn do_main(&mut self) -> Result<(), Fatal<C::NodeType>> {
         tracing::debug!("raft node is initializing");
 
         let state = {
@@ -334,10 +333,7 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
     /// handles this by having the leader exchange heartbeat messages with a majority of the
     /// cluster before responding to read-only requests.
     #[tracing::instrument(level = "trace", skip(self, tx))]
-    pub(super) async fn handle_check_is_leader_request(
-        &mut self,
-        tx: RaftRespTx<(), CheckIsLeaderError<C::NodeId, C::NodeData>>,
-    ) {
+    pub(super) async fn handle_check_is_leader_request(&mut self, tx: RaftRespTx<(), CheckIsLeaderError<C::NodeType>>) {
         // Setup sentinel values to track when we've received majority confirmation of leadership.
 
         let em = &self.engine.state.membership_state.effective;
@@ -466,10 +462,10 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
     #[tracing::instrument(level = "debug", skip_all)]
     pub(super) async fn add_learner(
         &mut self,
-        target: C::NodeId,
-        node: Option<Node<C::NodeData>>,
-        tx: RaftAddLearnerTx<C::NodeId, C::NodeData>,
-    ) -> Result<(), Fatal<C::NodeId, C::NodeData>> {
+        target: <C::NodeType as NodeType>::NodeId,
+        node: Option<Node<C::NodeType>>,
+        tx: RaftRespTx<AddLearnerResponse<C::NodeType>, AddLearnerError<C::NodeType>>,
+    ) -> Result<(), Fatal<C::NodeType>> {
         if let Some(l) = &self.leader_data {
             tracing::debug!(
                 "add target node {} as learner; current nodes: {:?}",
@@ -538,11 +534,11 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
     #[tracing::instrument(level = "debug", skip(self, tx))]
     pub(super) async fn change_membership(
         &mut self,
-        changes: ChangeMembers<C::NodeId>,
+        changes: ChangeMembers<C::NodeType>,
         expectation: Option<Expectation>,
         turn_to_learner: bool,
-        tx: RaftRespTx<ClientWriteResponse<C>, ClientWriteError<C::NodeId, C::NodeData>>,
-    ) -> Result<(), Fatal<C::NodeId, C::NodeData>> {
+        tx: RaftRespTx<ClientWriteResponse<C>, ClientWriteError<C::NodeType>>,
+    ) -> Result<(), Fatal<C::NodeType>> {
         let last = self.engine.state.membership_state.effective.membership.get_joint_config().last().unwrap();
         let members = changes.apply_to(last);
 
@@ -600,7 +596,7 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
     }
 
     /// Check if the effective membership is committed, so that a new membership is allowed to be proposed.
-    fn check_membership_committed(&self) -> Result<(), ChangeMembershipError<C::NodeId>> {
+    fn check_membership_committed(&self) -> Result<(), ChangeMembershipError<C::NodeType>> {
         let st = &self.engine.state;
 
         if st.is_membership_committed() {
@@ -616,9 +612,9 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
     /// return Ok if all the current replication states satisfy the `expectation` for changing membership.
     fn check_replication_states<'n>(
         &self,
-        nodes: impl Iterator<Item = &'n C::NodeId>,
+        nodes: impl Iterator<Item = &'n <C::NodeType as NodeType>::NodeId>,
         expectation: Option<Expectation>,
-    ) -> Result<(), ChangeMembershipError<C::NodeId>> {
+    ) -> Result<(), ChangeMembershipError<C::NodeType>> {
         let expectation = match &expectation {
             None => {
                 // No expectation, whatever is OK.
@@ -671,8 +667,8 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
     pub async fn write_entry(
         &mut self,
         payload: EntryPayload<C>,
-        resp_tx: Option<ClientWriteTx<C, C::NodeId, C::NodeData>>,
-    ) -> Result<LogId<C::NodeId>, Fatal<C::NodeId, C::NodeData>> {
+        resp_tx: Option<RaftRespTx<ClientWriteResponse<C>, ClientWriteError<C::NodeType>>>,
+    ) -> Result<LogId<<C::NodeType as NodeType>::NodeId>, Fatal<C::NodeType>> {
         tracing::debug!(payload = display(payload.summary()), "write_entry");
 
         let mut entry_refs = [EntryRef::new(&payload)];
@@ -712,7 +708,7 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
 
     /// Report a metrics payload on the current state of the Raft node.
     #[tracing::instrument(level = "trace", skip(self))]
-    pub(crate) fn report_metrics(&self, replication: Update<Option<Versioned<ReplicationMetrics<C::NodeId>>>>) {
+    pub(crate) fn report_metrics(&self, replication: Update<Option<Versioned<ReplicationMetrics<C::NodeType>>>>) {
         let replication = match replication {
             Update::Update(v) => v,
             Update::AsIs => self.tx_metrics.borrow().replication.clone(),
@@ -760,8 +756,8 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
     #[tracing::instrument(level = "debug", skip(self))]
     pub(crate) async fn handle_initialize(
         &mut self,
-        member_nodes: BTreeMap<C::NodeId, Option<Node<C::NodeData>>>,
-    ) -> Result<(), InitializeError<C::NodeId, C::NodeData>> {
+        member_nodes: BTreeMap<<C::NodeType as NodeType>::NodeId, Option<Node<C::NodeType>>>,
+    ) -> Result<(), InitializeError<C::NodeType>> {
         let membership = Membership::try_from(member_nodes)?;
         let payload = EntryPayload::<C>::Membership(membership);
 
@@ -774,7 +770,7 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
 
     /// Save the Raft node's current hard state to disk.
     #[tracing::instrument(level = "trace", skip(self))]
-    pub(crate) async fn save_vote(&mut self) -> Result<(), StorageError<C::NodeId, C::NodeData>> {
+    pub(crate) async fn save_vote(&mut self) -> Result<(), StorageError<C::NodeType>> {
         self.storage.save_vote(&self.engine.state.vote).await
     }
 
@@ -839,7 +835,7 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
 
     /// Update the system's snapshot state based on the given data.
     #[tracing::instrument(level = "trace", skip(self))]
-    pub(crate) fn update_snapshot_state(&mut self, update: SnapshotUpdate<C::NodeId>) {
+    pub(crate) fn update_snapshot_state(&mut self, update: SnapshotUpdate<C::NodeType>) {
         if let SnapshotUpdate::SnapshotComplete(log_id) = update {
             self.engine.snapshot_last_log_id = Some(log_id);
             self.engine.metrics_flags.set_data_changed();
@@ -923,7 +919,7 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
     /// Reject a request due to the Raft node being in a state which prohibits the request.
     #[tracing::instrument(level = "trace", skip(self, tx))]
     pub(crate) fn reject_with_forward_to_leader<T, E>(&self, tx: RaftRespTx<T, E>)
-    where E: From<ForwardToLeader<C::NodeId, C::NodeData>> {
+    where E: From<ForwardToLeader<C::NodeType>> {
         let l = self.current_leader();
         let err = ForwardToLeader {
             leader_id: l,
@@ -934,7 +930,7 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
-    pub fn current_leader(&self) -> Option<C::NodeId> {
+    pub fn current_leader(&self) -> Option<<C::NodeType as NodeType>::NodeId> {
         if !self.engine.state.vote.committed {
             return None;
         }
@@ -952,7 +948,10 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
         }
     }
 
-    pub(crate) fn get_leader_node(&self, leader_id: Option<C::NodeId>) -> Option<Node<C::NodeData>> {
+    pub(crate) fn get_leader_node(
+        &self,
+        leader_id: Option<<C::NodeType as NodeType>::NodeId>,
+    ) -> Option<Node<C::NodeType>> {
         match leader_id {
             None => None,
             Some(id) => self.engine.state.membership_state.effective.get_node(&id).cloned(),
@@ -960,10 +959,7 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    pub(crate) async fn apply_to_state_machine(
-        &mut self,
-        upto_index: u64,
-    ) -> Result<(), StorageError<C::NodeId, C::NodeData>> {
+    pub(crate) async fn apply_to_state_machine(&mut self, upto_index: u64) -> Result<(), StorageError<C::NodeType>> {
         tracing::debug!(upto_index = display(upto_index), "apply_to_state_machine");
 
         let since = self.engine.state.last_applied.next_index();
@@ -1014,7 +1010,7 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
     pub(super) async fn send_response(
         entry: &Entry<C>,
         resp: C::R,
-        tx: Option<ClientWriteTx<C, C::NodeId, C::NodeData>>,
+        tx: Option<RaftRespTx<ClientWriteResponse<C>, ClientWriteError<C::NodeType>>>,
     ) {
         tracing::debug!(entry = display(entry.summary()), "send_response");
 
@@ -1044,7 +1040,7 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
 
     /// Handle the post-commit logic for a client request.
     #[tracing::instrument(level = "debug", skip(self))]
-    pub(super) async fn leader_commit(&mut self, log_index: u64) -> Result<(), StorageError<C::NodeId, C::NodeData>> {
+    pub(super) async fn leader_commit(&mut self, log_index: u64) -> Result<(), StorageError<C::NodeType>> {
         self.leader_step_down();
 
         self.apply_to_state_machine(log_index).await?;
@@ -1057,7 +1053,7 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
     /// It does not block until the entry is committed or actually sent out.
     /// It merely broadcasts a signal to inform the replication threads.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub(super) fn replicate_entry(&mut self, log_id: LogId<C::NodeId>) {
+    pub(super) fn replicate_entry(&mut self, log_id: LogId<<C::NodeType as NodeType>::NodeId>) {
         if let Some(l) = &self.leader_data {
             if tracing::enabled!(Level::DEBUG) {
                 for node_id in l.nodes.keys() {
@@ -1079,7 +1075,10 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
     /// Spawn a new replication stream returning its replication state handle.
     #[tracing::instrument(level = "debug", skip(self))]
     #[allow(clippy::type_complexity)]
-    pub(crate) async fn spawn_replication_stream(&mut self, target: C::NodeId) -> ReplicationStream<C::NodeId> {
+    pub(crate) async fn spawn_replication_stream(
+        &mut self,
+        target: <C::NodeType as NodeType>::NodeId,
+    ) -> ReplicationStream<C::NodeType> {
         let target_node = self.engine.state.membership_state.effective.get_node(&target);
 
         ReplicationCore::<C, N, S>::spawn(
@@ -1100,7 +1099,7 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
     ///
     /// Return true if removed.
     #[tracing::instrument(level = "trace", skip(self))]
-    pub async fn remove_replication(&mut self, target: C::NodeId) -> bool {
+    pub async fn remove_replication(&mut self, target: <C::NodeType as NodeType>::NodeId) -> bool {
         tracing::info!("removed_replication to: {}", target);
 
         let repl_state = if let Some(l) = &mut self.leader_data {
@@ -1163,9 +1162,9 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
     pub(crate) async fn run_engine_commands<'e, Ent>(
         &mut self,
         input_entries: &'e [Ent],
-    ) -> Result<(), StorageError<C::NodeId, C::NodeData>>
+    ) -> Result<(), StorageError<C::NodeType>>
     where
-        Ent: RaftLogId<C::NodeId> + Sync + Send + 'e,
+        Ent: RaftLogId<<C::NodeType as NodeType>::NodeId> + Sync + Send + 'e,
         &'e Ent: Into<Entry<C>>,
     {
         if tracing::enabled!(Level::DEBUG) {
@@ -1186,7 +1185,7 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
     }
 
     #[tracing::instrument(level="debug", skip_all, fields(id=display(self.id), raft_state="leader"))]
-    pub(crate) async fn leader_loop(&mut self) -> Result<(), Fatal<C::NodeId, C::NodeData>> {
+    pub(crate) async fn leader_loop(&mut self) -> Result<(), Fatal<C::NodeType>> {
         // Setup state as leader.
         self.last_heartbeat = None;
         debug_assert!(self.engine.state.vote.committed);
@@ -1228,7 +1227,7 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
 
     /// Run an event handling loop until server state changes
     #[tracing::instrument(level="debug", skip(self), fields(id=display(self.id)))]
-    async fn runtime_loop(&mut self, server_state: ServerState) -> Result<(), Fatal<C::NodeId, C::NodeData>> {
+    async fn runtime_loop(&mut self, server_state: ServerState) -> Result<(), Fatal<C::NodeType>> {
         loop {
             if self.engine.state.server_state != server_state {
                 tracing::info!(
@@ -1256,7 +1255,7 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
 
     /// Spawn parallel vote requests to all cluster members.
     #[tracing::instrument(level = "trace", skip(self))]
-    async fn spawn_parallel_vote_requests(&mut self, vote_req: &VoteRequest<C::NodeId>) {
+    async fn spawn_parallel_vote_requests(&mut self, vote_req: &VoteRequest<C::NodeType>) {
         let members = self.engine.state.membership_state.effective.voter_ids();
 
         let vote = vote_req.vote;
@@ -1294,8 +1293,8 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
     #[tracing::instrument(level = "debug", skip_all)]
     pub(super) async fn handle_vote_request(
         &mut self,
-        req: VoteRequest<C::NodeId>,
-    ) -> Result<VoteResponse<C::NodeId>, VoteError<C::NodeId, C::NodeData>> {
+        req: VoteRequest<C::NodeType>,
+    ) -> Result<VoteResponse<C::NodeType>, VoteError<C::NodeType>> {
         tracing::debug!(req = display(req.summary()), "handle_vote_request");
 
         // TODO(xp): Checking last_heartbeat can be removed,
@@ -1329,9 +1328,9 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
     #[tracing::instrument(level = "debug", skip(self, resp))]
     async fn handle_vote_resp(
         &mut self,
-        resp: VoteResponse<C::NodeId>,
-        target: C::NodeId,
-    ) -> Result<(), StorageError<C::NodeId, C::NodeData>> {
+        resp: VoteResponse<C::NodeType>,
+        target: <C::NodeType as NodeType>::NodeId,
+    ) -> Result<(), StorageError<C::NodeType>> {
         tracing::debug!(
             resp = debug(&resp),
             target = display(target),
@@ -1347,7 +1346,7 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
     }
 
     #[tracing::instrument(level = "debug", skip(self, msg), fields(state = debug(self.engine.state.server_state), id=display(self.id)))]
-    pub(crate) async fn handle_api_msg(&mut self, msg: RaftMsg<C, N, S>) -> Result<(), Fatal<C::NodeId, C::NodeData>> {
+    pub(crate) async fn handle_api_msg(&mut self, msg: RaftMsg<C, N, S>) -> Result<(), Fatal<C::NodeType>> {
         tracing::debug!("recv from rx_api: {}", msg.summary());
 
         let is_leader = || self.engine.state.server_state == ServerState::Leader;
@@ -1468,9 +1467,9 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
     #[tracing::instrument(level = "trace", skip(self))]
     async fn handle_revert_to_follower(
         &mut self,
-        _target: C::NodeId,
-        vote: Vote<C::NodeId>,
-    ) -> Result<(), StorageError<C::NodeId, C::NodeData>> {
+        _target: <C::NodeType as NodeType>::NodeId,
+        vote: Vote<<C::NodeType as NodeType>::NodeId>,
+    ) -> Result<(), StorageError<C::NodeType>> {
         if vote > self.engine.state.vote {
             self.engine.state.vote = vote;
             self.save_vote().await?;
@@ -1483,9 +1482,9 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
     #[tracing::instrument(level = "debug", skip_all)]
     async fn handle_update_matched(
         &mut self,
-        target: C::NodeId,
-        result: Result<LogId<C::NodeId>, String>,
-    ) -> Result<(), StorageError<C::NodeId, C::NodeData>> {
+        target: <C::NodeType as NodeType>::NodeId,
+        result: Result<LogId<<C::NodeType as NodeType>::NodeId>, String>,
+    ) -> Result<(), StorageError<C::NodeType>> {
         // Update target's match index & check if it is awaiting removal.
 
         tracing::debug!(
@@ -1527,7 +1526,11 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
     }
 
     #[tracing::instrument(level = "trace", skip(self))]
-    fn update_replication_metrics(&mut self, target: C::NodeId, matched: LogId<C::NodeId>) {
+    fn update_replication_metrics(
+        &mut self,
+        target: <C::NodeType as NodeType>::NodeId,
+        matched: LogId<<C::NodeType as NodeType>::NodeId>,
+    ) {
         tracing::debug!(%target, ?matched, "update_leader_metrics");
 
         if let Some(l) = &mut self.leader_data {
@@ -1540,7 +1543,7 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
 
     /// If a message is sent by a previous server state but is received by current server state,
     /// it is a stale message and should be just ignored.
-    fn does_vote_match(&self, vote: Vote<C::NodeId>, msg: impl Display) -> bool {
+    fn does_vote_match(&self, vote: Vote<<C::NodeType as NodeType>::NodeId>, msg: impl Display) -> bool {
         if vote != self.engine.state.vote {
             tracing::warn!(
                 "vote changed: msg sent by: {:?}; curr: {}; ignore when ({})",
@@ -1560,9 +1563,9 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
     #[tracing::instrument(level = "debug", skip(self, tx))]
     async fn handle_needs_snapshot(
         &mut self,
-        must_include: Option<LogId<C::NodeId>>,
-        tx: oneshot::Sender<Snapshot<C::NodeId, C::NodeData, S::SnapshotData>>,
-    ) -> Result<(), StorageError<C::NodeId, C::NodeData>> {
+        must_include: Option<LogId<<C::NodeType as NodeType>::NodeId>>,
+        tx: oneshot::Sender<Snapshot<C::NodeType, S::SnapshotData>>,
+    ) -> Result<(), StorageError<C::NodeType>> {
         // Ensure snapshotting is configured, else do nothing.
         let threshold = match &self.config.snapshot_policy {
             SnapshotPolicy::LogsSinceLast(threshold) => *threshold,
@@ -1629,10 +1632,10 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftRuntime
         &mut self,
         input_ref_entries: &'e [Ent],
         cur: &mut usize,
-        cmd: &Command<C::NodeId, C::NodeData>,
-    ) -> Result<(), StorageError<C::NodeId, C::NodeData>>
+        cmd: &Command<C::NodeType>,
+    ) -> Result<(), StorageError<C::NodeType>>
     where
-        Ent: RaftLogId<C::NodeId> + Sync + Send + 'e,
+        Ent: RaftLogId<<C::NodeType as NodeType>::NodeId> + Sync + Send + 'e,
         &'e Ent: Into<Entry<C>>,
     {
         // Run non-role-specific command.

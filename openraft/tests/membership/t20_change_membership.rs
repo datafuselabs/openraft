@@ -3,7 +3,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use maplit::btreeset;
-use memstore::MemNodeId;
 use openraft::error::ChangeMembershipError;
 use openraft::error::ClientWriteError;
 use openraft::Config;
@@ -170,7 +169,7 @@ async fn change_with_lagging_learner_non_blocking() -> anyhow::Result<()> {
         tracing::info!("--- got res: {:?}", res);
 
         let err = res.unwrap_err();
-        let err: ChangeMembershipError<MemNodeId> = err.try_into().unwrap();
+        let err: ChangeMembershipError<_> = err.try_into().unwrap();
 
         match err {
             ChangeMembershipError::LearnerIsLagging(e) => {

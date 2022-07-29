@@ -4,24 +4,21 @@ use crate::core::ServerState;
 use crate::error::Fatal;
 use crate::membership::EffectiveMembership;
 use crate::metrics::ReplicationMetrics;
-use crate::node::NodeData;
 use crate::summary::MessageSummary;
 use crate::versioned::Versioned;
 use crate::LogId;
-use crate::NodeId;
+use crate::NodeType;
 
 /// A set of metrics describing the current state of a Raft node.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize), serde(bound = ""))]
-pub struct RaftMetrics<NID, ND>
-where
-    NID: NodeId,
-    ND: NodeData,
+pub struct RaftMetrics<NT>
+where NT: NodeType
 {
-    pub running_state: Result<(), Fatal<NID, ND>>,
+    pub running_state: Result<(), Fatal<NT>>,
 
     /// The ID of the Raft node.
-    pub id: NID,
+    pub id: NT::NodeId,
 
     // ---
     // --- data ---
@@ -33,11 +30,11 @@ where
     pub last_log_index: Option<u64>,
 
     /// The last log index has been applied to this Raft node's state machine.
-    pub last_applied: Option<LogId<NID>>,
+    pub last_applied: Option<LogId<NT::NodeId>>,
 
     /// The id of the last log included in snapshot.
     /// If there is no snapshot, it is (0,0).
-    pub snapshot: Option<LogId<NID>>,
+    pub snapshot: Option<LogId<NT::NodeId>>,
 
     // ---
     // --- cluster ---
@@ -46,22 +43,20 @@ where
     pub state: ServerState,
 
     /// The current cluster leader.
-    pub current_leader: Option<NID>,
+    pub current_leader: Option<NT::NodeId>,
 
     /// The current membership config of the cluster.
-    pub membership_config: Arc<EffectiveMembership<NID, ND>>,
+    pub membership_config: Arc<EffectiveMembership<NT>>,
 
     // ---
     // --- replication ---
     // ---
     /// The metrics about the leader. It is Some() only when this node is leader.
-    pub replication: Option<Versioned<ReplicationMetrics<NID>>>,
+    pub replication: Option<Versioned<ReplicationMetrics<NT>>>,
 }
 
-impl<NID, ND> MessageSummary<RaftMetrics<NID, ND>> for RaftMetrics<NID, ND>
-where
-    NID: NodeId,
-    ND: NodeData,
+impl<NT> MessageSummary<RaftMetrics<NT>> for RaftMetrics<NT>
+where NT: NodeType
 {
     fn summary(&self) -> String {
         format!("Metrics{{id:{},{:?}, term:{}, last_log:{:?}, last_applied:{:?}, leader:{:?}, membership:{}, snapshot:{:?}, replication:{}",
@@ -78,12 +73,10 @@ where
     }
 }
 
-impl<NID, ND> RaftMetrics<NID, ND>
-where
-    NID: NodeId,
-    ND: NodeData,
+impl<NT> RaftMetrics<NT>
+where NT: NodeType
 {
-    pub fn new_initial(id: NID) -> Self {
+    pub fn new_initial(id: NT::NodeId) -> Self {
         Self {
             running_state: Ok(()),
             id,

@@ -1,39 +1,36 @@
 use crate::engine::LogIdList;
 use crate::internal_server_state::InternalServerState;
 use crate::leader::Leader;
-use crate::node::NodeData;
 use crate::raft_types::RaftLogId;
 use crate::LogId;
 use crate::LogIdOptionExt;
 use crate::MembershipState;
-use crate::NodeId;
+use crate::NodeType;
 use crate::ServerState;
 use crate::Vote;
 
 /// A struct used to represent the raft state which a Raft node needs.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct RaftState<NID, ND>
-where
-    NID: NodeId,
-    ND: NodeData,
+pub struct RaftState<NT>
+where NT: NodeType
 {
     /// The vote state of this node.
-    pub vote: Vote<NID>,
+    pub vote: Vote<NT::NodeId>,
 
     /// The LogId of the last log applied to the state machine.
-    pub last_applied: Option<LogId<NID>>,
+    pub last_applied: Option<LogId<NT::NodeId>>,
 
     /// All log ids this node has.
-    pub log_ids: LogIdList<NID>,
+    pub log_ids: LogIdList<NT>,
 
     /// The latest cluster membership configuration found, in log or in state machine.
-    pub membership_state: MembershipState<NID, ND>,
+    pub membership_state: MembershipState<NT>,
 
     // --
     // -- volatile fields: they are not persisted.
     // --
     /// The internal server state used by Engine.
-    pub(crate) internal_server_state: InternalServerState<NID, ND>,
+    pub(crate) internal_server_state: InternalServerState<NT>,
 
     /// The log id of the last known committed entry.
     ///
@@ -42,25 +39,23 @@ where
     /// - A quorum could be a uniform quorum or joint quorum.
     ///
     /// - `committed` in raft is volatile and will not be persisted.
-    pub committed: Option<LogId<NID>>,
+    pub committed: Option<LogId<NT::NodeId>>,
 
     pub server_state: ServerState,
 }
 
-impl<NID, ND> RaftState<NID, ND>
-where
-    NID: NodeId,
-    ND: NodeData,
+impl<NT> RaftState<NT>
+where NT: NodeType
 {
     /// Append a list of `log_id`.
     ///
     /// The log ids in the input has to be continuous.
-    pub(crate) fn extend_log_ids_from_same_leader<'a, LID: RaftLogId<NID> + 'a>(&mut self, new_log_ids: &[LID]) {
+    pub(crate) fn extend_log_ids_from_same_leader<'a, LID: RaftLogId<NT::NodeId> + 'a>(&mut self, new_log_ids: &[LID]) {
         self.log_ids.extend_from_same_leader(new_log_ids)
     }
 
     #[allow(dead_code)]
-    pub(crate) fn extend_log_ids<'a, LID: RaftLogId<NID> + 'a>(&mut self, new_log_id: &[LID]) {
+    pub(crate) fn extend_log_ids<'a, LID: RaftLogId<NT::NodeId> + 'a>(&mut self, new_log_id: &[LID]) {
         self.log_ids.extend(new_log_id)
     }
 
@@ -68,7 +63,7 @@ where
     ///
     /// It will return `last_purged_log_id` if index is at the last purged index.
     #[allow(dead_code)]
-    pub(crate) fn get_log_id(&self, index: u64) -> Option<LogId<NID>> {
+    pub(crate) fn get_log_id(&self, index: u64) -> Option<LogId<NT::NodeId>> {
         self.log_ids.get(index)
     }
 
@@ -76,7 +71,7 @@ where
     ///
     /// It assumes a committed log will always be chosen, according to raft spec.
     #[allow(dead_code)]
-    pub(crate) fn has_log_id(&self, log_id: &LogId<NID>) -> bool {
+    pub(crate) fn has_log_id(&self, log_id: &LogId<NT::NodeId>) -> bool {
         if log_id.index < self.committed.next_index() {
             debug_assert!(Some(*log_id) <= self.committed);
             return true;
@@ -91,7 +86,7 @@ where
     }
 
     /// The last known log id in the store.
-    pub(crate) fn last_log_id(&self) -> Option<LogId<NID>> {
+    pub(crate) fn last_log_id(&self) -> Option<LogId<NT::NodeId>> {
         self.log_ids.last().cloned()
     }
 
@@ -101,7 +96,7 @@ where
     /// left open and right close.
     ///
     /// `last_purged_log_id == last_log_id` means there is no log entry in the storage.
-    pub(crate) fn last_purged_log_id(&self) -> Option<LogId<NID>> {
+    pub(crate) fn last_purged_log_id(&self) -> Option<LogId<NT::NodeId>> {
         self.log_ids.first().cloned()
     }
 
@@ -119,7 +114,10 @@ where
 
     /// Update field `committed` if the input is greater.
     /// If updated, it returns the previous value in a `Some()`.
-    pub(crate) fn update_committed(&mut self, committed: &Option<LogId<NID>>) -> Option<Option<LogId<NID>>> {
+    pub(crate) fn update_committed(
+        &mut self,
+        committed: &Option<LogId<NT::NodeId>>,
+    ) -> Option<Option<LogId<NT::NodeId>>> {
         if committed > &self.committed {
             let prev = self.committed;
 

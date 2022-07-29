@@ -18,9 +18,9 @@ committed one and the effective one.
 The second last membership log has to be committed.
 
 ```rust
-pub struct MembershipState<NID: NodeId> {
-    pub committed: Arc<EffectiveMembership<NID>>,
-    pub effective: Arc<EffectiveMembership<NID>>,
+pub struct MembershipState<NT: NodeType> {
+    pub committed: Arc<EffectiveMembership<NT::NodeId>>,
+    pub effective: Arc<EffectiveMembership<NT::NodeId>>,
 }
 ```
 

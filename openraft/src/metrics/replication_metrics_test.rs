@@ -1,5 +1,6 @@
 use crate::metrics::ReplicationMetrics;
 use crate::metrics::UpdateMatchedLogId;
+use crate::raft_state_test::TestNodeType;
 use crate::versioned::Updatable;
 use crate::versioned::Versioned;
 use crate::LeaderId;
@@ -8,7 +9,7 @@ use crate::MessageSummary;
 
 #[test]
 fn test_versioned() -> anyhow::Result<()> {
-    let mut a = Versioned::new(ReplicationMetrics::<u64> {
+    let mut a = Versioned::new(ReplicationMetrics::<TestNodeType> {
         replication: Default::default(),
     });
 
@@ -85,7 +86,7 @@ fn test_versioned() -> anyhow::Result<()> {
 
 #[test]
 fn test_versioned_methods() -> anyhow::Result<()> {
-    let mut a = Versioned::new(ReplicationMetrics::<u64> {
+    let mut a = Versioned::new(ReplicationMetrics::<TestNodeType> {
         replication: Default::default(),
     });
 

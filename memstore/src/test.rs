@@ -7,15 +7,15 @@ use openraft::testing::Suite;
 use openraft::StorageError;
 
 use crate::Config;
-use crate::MemNodeId;
+use crate::MemNodeType;
 use crate::MemStore;
 
 struct MemBuilder {}
 #[async_trait]
 impl StoreBuilder<Config, Arc<MemStore>> for MemBuilder {
-    async fn run_test<Fun, Ret, Res>(&self, t: Fun) -> Result<Ret, StorageError<MemNodeId, ()>>
+    async fn run_test<Fun, Ret, Res>(&self, t: Fun) -> Result<Ret, StorageError<MemNodeType>>
     where
-        Res: Future<Output = Result<Ret, StorageError<MemNodeId, ()>>> + Send,
+        Res: Future<Output = Result<Ret, StorageError<MemNodeType>>> + Send,
         Fun: Fn(Arc<MemStore>) -> Res + Sync + Send,
     {
         let store = MemStore::new_async().await;
@@ -46,7 +46,7 @@ impl StoreBuilder<Config, Arc<MemStore>> for MemBuilder {
 /// ```
 
 #[test]
-pub fn test_mem_store() -> Result<(), StorageError<MemNodeId, ()>> {
+pub fn test_mem_store() -> Result<(), StorageError<MemNodeType>> {
     Suite::test_all(MemBuilder {})?;
     Ok(())
 }

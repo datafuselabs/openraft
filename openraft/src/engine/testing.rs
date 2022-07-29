@@ -1,3 +1,5 @@
+use crate::raft_state_test::TestNodeType;
+
 /// Req for test
 #[derive(Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
@@ -10,5 +12,5 @@ pub(crate) struct Resp {}
 
 // Config for test
 crate::declare_raft_types!(
-   pub(crate) Config: D = Req, R = Resp, NodeId = u64, NodeData=()
+   pub(crate) Config: D = Req, R = Resp, NodeType = TestNodeType
 );

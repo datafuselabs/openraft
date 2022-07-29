@@ -1,9 +1,9 @@
 # Vote
 
 ```rust
-struct Vote<NID: NodeId> {
+struct Vote<NT: NodeType> {
     term: u64,
-    node_id: NID,
+    node_id: NT::NodeId,
     committed: bool
 }
 ```

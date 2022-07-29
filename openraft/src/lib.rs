@@ -73,6 +73,7 @@ pub use crate::network::RaftNetworkFactory;
 pub use crate::node::Node;
 pub use crate::node::NodeData;
 pub use crate::node::NodeId;
+pub use crate::node::NodeType;
 pub use crate::raft::Raft;
 pub use crate::raft::RaftTypeConfig;
 pub use crate::raft_state::RaftState;

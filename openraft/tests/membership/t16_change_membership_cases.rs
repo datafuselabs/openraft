@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use maplit::btreeset;
 use memstore::MemNodeId;
+use memstore::MemNodeType;
 use openraft::ChangeMembers;
 use openraft::Config;
 use openraft::ServerState;
@@ -98,7 +99,7 @@ async fn m012_remove_m13() -> anyhow::Result<()> {
 }
 
 #[tracing::instrument(level = "debug")]
-async fn change_from_to(old: BTreeSet<MemNodeId>, change_members: ChangeMembers<MemNodeId>) -> anyhow::Result<()> {
+async fn change_from_to(old: BTreeSet<MemNodeId>, change_members: ChangeMembers<MemNodeType>) -> anyhow::Result<()> {
     let new = change_members.apply_to(&old);
 
     let mes = format!("from {:?} to {:?}", old, new);

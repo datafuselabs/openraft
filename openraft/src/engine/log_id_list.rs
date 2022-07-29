@@ -2,7 +2,7 @@ use crate::raft_types::RaftLogId;
 use crate::storage::StorageHelper;
 use crate::LogId;
 use crate::LogIdOptionExt;
-use crate::NodeId;
+use crate::NodeType;
 use crate::RaftStorage;
 use crate::RaftTypeConfig;
 use crate::StorageError;
@@ -16,12 +16,12 @@ use crate::StorageError;
 /// The last one may have the same leader id as the second last one.
 #[derive(Default, Debug, Clone)]
 #[derive(PartialEq, Eq)]
-pub struct LogIdList<NID: NodeId> {
-    key_log_ids: Vec<LogId<NID>>,
+pub struct LogIdList<NT: NodeType> {
+    key_log_ids: Vec<LogId<NT::NodeId>>,
 }
 
-impl<NID> LogIdList<NID>
-where NID: NodeId
+impl<NT> LogIdList<NT>
+where NT: NodeType
 {
     /// Load all log ids that are the first one proposed by a leader.
     ///
@@ -44,12 +44,12 @@ where NID: NodeId
     /// A-------C-------C : find(A,C)
     /// ```
     pub(crate) async fn load_log_ids<C, Sto>(
-        last_purged_log_id: Option<LogId<NID>>,
-        last_log_id: Option<LogId<NID>>,
+        last_purged_log_id: Option<LogId<NT::NodeId>>,
+        last_log_id: Option<LogId<NT::NodeId>>,
         sto: &mut StorageHelper<'_, C, Sto>,
-    ) -> Result<LogIdList<NID>, StorageError<NID, C::NodeData>>
+    ) -> Result<LogIdList<NT>, StorageError<NT>>
     where
-        C: RaftTypeConfig<NodeId = NID>,
+        C: RaftTypeConfig<NodeType = NT>,
         Sto: RaftStorage<C>,
     {
         let mut res = vec![];
@@ -119,8 +119,8 @@ where NID: NodeId
     }
 }
 
-impl<NID: NodeId> LogIdList<NID> {
-    pub fn new(key_log_ids: impl IntoIterator<Item = LogId<NID>>) -> Self {
+impl<NT: NodeType> LogIdList<NT> {
+    pub fn new(key_log_ids: impl IntoIterator<Item = LogId<NT::NodeId>>) -> Self {
         Self {
             key_log_ids: key_log_ids.into_iter().collect(),
         }
@@ -129,7 +129,7 @@ impl<NID: NodeId> LogIdList<NID> {
     /// Extends a list of `log_id` that are proposed by a same leader.
     ///
     /// The log ids in the input has to be continuous.
-    pub(crate) fn extend_from_same_leader<'a, LID: RaftLogId<NID> + 'a>(&mut self, new_ids: &[LID]) {
+    pub(crate) fn extend_from_same_leader<'a, LID: RaftLogId<NT::NodeId> + 'a>(&mut self, new_ids: &[LID]) {
         if let Some(first) = new_ids.first() {
             let first_id = first.get_log_id();
             self.append(*first_id);
@@ -147,7 +147,7 @@ impl<NID: NodeId> LogIdList<NID> {
 
     /// Extends a list of `log_id`.
     #[allow(dead_code)]
-    pub(crate) fn extend<'a, LID: RaftLogId<NID> + 'a>(&mut self, new_ids: &[LID]) {
+    pub(crate) fn extend<'a, LID: RaftLogId<NT::NodeId> + 'a>(&mut self, new_ids: &[LID]) {
         let mut prev = self.last().map(|x| x.leader_id);
 
         for x in new_ids.iter() {
@@ -176,7 +176,7 @@ impl<NID: NodeId> LogIdList<NID> {
     ///
     /// NOTE: The last two in `key_log_ids` may be with the same `leader_id`, because `last_log_id` always present in
     /// `log_ids`.
-    pub(crate) fn append(&mut self, new_log_id: LogId<NID>) {
+    pub(crate) fn append(&mut self, new_log_id: LogId<NT::NodeId>) {
         let l = self.key_log_ids.len();
         if l == 0 {
             self.key_log_ids.push(new_log_id);
@@ -237,7 +237,7 @@ impl<NID: NodeId> LogIdList<NID> {
 
     /// Purge log ids upto the log with index `upto_index`, inclusive.
     #[allow(dead_code)]
-    pub(crate) fn purge(&mut self, upto: &LogId<NID>) {
+    pub(crate) fn purge(&mut self, upto: &LogId<NT::NodeId>) {
         let last = self.last().cloned();
 
         // When installing  snapshot it may need to purge across the `last_log_id`.
@@ -270,7 +270,7 @@ impl<NID: NodeId> LogIdList<NID> {
     ///
     /// It will return `last_purged_log_id` if index is at the last purged index.
     #[allow(dead_code)]
-    pub(crate) fn get(&self, index: u64) -> Option<LogId<NID>> {
+    pub(crate) fn get(&self, index: u64) -> Option<LogId<NT::NodeId>> {
         let res = self.key_log_ids.binary_search_by(|log_id| log_id.index.cmp(&index));
 
         match res {
@@ -286,16 +286,16 @@ impl<NID: NodeId> LogIdList<NID> {
     }
 
     #[allow(dead_code)]
-    pub(crate) fn first(&self) -> Option<&LogId<NID>> {
+    pub(crate) fn first(&self) -> Option<&LogId<NT::NodeId>> {
         self.key_log_ids.first()
     }
 
     #[allow(dead_code)]
-    pub(crate) fn last(&self) -> Option<&LogId<NID>> {
+    pub(crate) fn last(&self) -> Option<&LogId<NT::NodeId>> {
         self.key_log_ids.last()
     }
 
-    pub(crate) fn key_log_ids(&self) -> &[LogId<NID>] {
+    pub(crate) fn key_log_ids(&self) -> &[LogId<NT::NodeId>] {
         &self.key_log_ids
     }
 }

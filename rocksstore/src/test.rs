@@ -7,15 +7,15 @@ use openraft::testing::Suite;
 use openraft::StorageError;
 
 use crate::Config;
-use crate::RocksNodeId;
+use crate::RocksNodeType;
 use crate::RocksStore;
 
 struct RocksBuilder {}
 #[async_trait]
 impl StoreBuilder<Config, Arc<RocksStore>> for RocksBuilder {
-    async fn run_test<Fun, Ret, Res>(&self, t: Fun) -> Result<Ret, StorageError<RocksNodeId, ()>>
+    async fn run_test<Fun, Ret, Res>(&self, t: Fun) -> Result<Ret, StorageError<RocksNodeType>>
     where
-        Res: Future<Output = Result<Ret, StorageError<RocksNodeId, ()>>> + Send,
+        Res: Future<Output = Result<Ret, StorageError<RocksNodeType>>> + Send,
         Fun: Fn(Arc<RocksStore>) -> Res + Sync + Send,
     {
         let td = tempdir::TempDir::new("RocksBuilder").expect("couldn't create temp dir");
@@ -49,7 +49,7 @@ impl StoreBuilder<Config, Arc<RocksStore>> for RocksBuilder {
 /// }
 /// ```
 #[test]
-pub fn test_mem_store() -> Result<(), StorageError<RocksNodeId, ()>> {
+pub fn test_mem_store() -> Result<(), StorageError<RocksNodeType>> {
     Suite::test_all(RocksBuilder {})?;
     Ok(())
 }

@@ -32,7 +32,7 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
     pub(super) async fn handle_install_snapshot_request(
         &mut self,
         req: InstallSnapshotRequest<C>,
-    ) -> Result<InstallSnapshotResponse<C::NodeId>, InstallSnapshotError<C::NodeId, C::NodeData>> {
+    ) -> Result<InstallSnapshotResponse<C::NodeType>, InstallSnapshotError<C::NodeType>> {
         tracing::debug!(req = display(req.summary()));
 
         if req.vote < self.engine.state.vote {
@@ -96,7 +96,7 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
     async fn begin_installing_snapshot(
         &mut self,
         req: InstallSnapshotRequest<C>,
-    ) -> Result<InstallSnapshotResponse<C::NodeId>, InstallSnapshotError<C::NodeId, C::NodeData>> {
+    ) -> Result<InstallSnapshotResponse<C::NodeType>, InstallSnapshotError<C::NodeType>> {
         tracing::debug!(req = display(req.summary()));
 
         let id = req.meta.snapshot_id.clone();
@@ -147,7 +147,7 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
         req: InstallSnapshotRequest<C>,
         mut offset: u64,
         mut snapshot: Box<S::SnapshotData>,
-    ) -> Result<InstallSnapshotResponse<C::NodeId>, InstallSnapshotError<C::NodeId, C::NodeData>> {
+    ) -> Result<InstallSnapshotResponse<C::NodeType>, InstallSnapshotError<C::NodeType>> {
         tracing::debug!(req = display(req.summary()));
 
         let id = req.meta.snapshot_id.clone();
@@ -194,7 +194,7 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
         &mut self,
         req: InstallSnapshotRequest<C>,
         mut snapshot: Box<S::SnapshotData>,
-    ) -> Result<(), StorageError<C::NodeId, C::NodeData>> {
+    ) -> Result<(), StorageError<C::NodeType>> {
         tracing::debug!(req = display(req.summary()));
 
         snapshot.as_mut().shutdown().await.map_err(|e| StorageError::IO {

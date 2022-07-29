@@ -1,10 +1,11 @@
 use crate::engine::LogIdList;
+use crate::raft_state_test::TestNodeType;
 use crate::LeaderId;
 use crate::LogId;
 
 #[test]
 fn test_log_id_list_extend_from_same_leader() -> anyhow::Result<()> {
-    let mut ids = LogIdList::<u64>::default();
+    let mut ids = LogIdList::<TestNodeType>::default();
 
     // Extend one log id to an empty LogIdList: Just store it directly
 
@@ -50,7 +51,7 @@ fn test_log_id_list_extend_from_same_leader() -> anyhow::Result<()> {
 
 #[test]
 fn test_log_id_list_extend() -> anyhow::Result<()> {
-    let mut ids = LogIdList::<u64>::default();
+    let mut ids = LogIdList::<TestNodeType>::default();
 
     // Extend one log id to an empty LogIdList: Just store it directly
 
@@ -114,7 +115,7 @@ fn test_log_id_list_extend() -> anyhow::Result<()> {
 
 #[test]
 fn test_log_id_list_append() -> anyhow::Result<()> {
-    let mut ids = LogIdList::<u64>::default();
+    let mut ids = LogIdList::<TestNodeType>::default();
 
     // Append log id one by one, check the internally constructed `key_log_id` as expected.
 
@@ -139,7 +140,7 @@ fn test_log_id_list_append() -> anyhow::Result<()> {
 fn test_log_id_list_truncate() -> anyhow::Result<()> {
     // Sample data for test
     let make_ids = || {
-        LogIdList::<u64>::new(vec![
+        LogIdList::<TestNodeType>::new(vec![
             log_id(2, 2), //
             log_id(3, 3),
             log_id(6, 6),
@@ -235,14 +236,14 @@ fn test_log_id_list_truncate() -> anyhow::Result<()> {
 fn test_log_id_list_purge() -> anyhow::Result<()> {
     // Purge on an empty log id list:
     {
-        let mut ids = LogIdList::<u64>::new(vec![]);
+        let mut ids = LogIdList::<TestNodeType>::new(vec![]);
         ids.purge(&log_id(2, 2));
         assert_eq!(vec![log_id(2, 2)], ids.key_log_ids());
     }
 
     // Sample data for test
     let make_ids = || {
-        LogIdList::<u64>::new(vec![
+        LogIdList::<TestNodeType>::new(vec![
             log_id(2, 2), //
             log_id(3, 3),
             log_id(6, 6),
@@ -308,7 +309,7 @@ fn test_log_id_list_purge() -> anyhow::Result<()> {
 fn test_log_id_list_get_log_id() -> anyhow::Result<()> {
     // Get log id from empty list always returns `None`.
 
-    let ids = LogIdList::<u64>::default();
+    let ids = LogIdList::<TestNodeType>::default();
 
     assert!(ids.get(0).is_none());
     assert!(ids.get(1).is_none());
@@ -316,7 +317,7 @@ fn test_log_id_list_get_log_id() -> anyhow::Result<()> {
 
     // Get log id that is a key log id or not.
 
-    let ids = LogIdList::<u64>::new(vec![
+    let ids = LogIdList::<TestNodeType>::new(vec![
         log_id(1, 1),
         log_id(1, 2),
         log_id(3, 3),

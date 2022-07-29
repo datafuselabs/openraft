@@ -2,7 +2,7 @@ use futures::future::AbortHandle;
 use tokio::sync::broadcast;
 
 use crate::LogId;
-use crate::NodeId;
+use crate::NodeType;
 
 /// The current snapshot state of the Raft node.
 pub(crate) enum SnapshotState<S> {
@@ -26,9 +26,9 @@ pub(crate) enum SnapshotState<S> {
 
 /// An update on a snapshot creation process.
 #[derive(Debug, Clone)]
-pub(crate) enum SnapshotUpdate<NID: NodeId> {
+pub(crate) enum SnapshotUpdate<NT: NodeType> {
     /// Snapshot creation has finished successfully and covers the given index.
-    SnapshotComplete(LogId<NID>),
+    SnapshotComplete(LogId<NT::NodeId>),
 
     /// Snapshot creation failed.
     SnapshotFailed,

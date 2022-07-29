@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use maplit::btreeset;
 
+use super::calc_purge_upto_test::TestNodeType;
 use crate::engine::Command;
 use crate::engine::Engine;
 use crate::engine::LogIdList;
@@ -18,16 +19,16 @@ fn log_id(term: u64, index: u64) -> LogId<u64> {
     }
 }
 
-fn m01() -> Membership<u64, ()> {
-    Membership::<u64, ()>::new(vec![btreeset! {0,1}], None)
+fn m01() -> Membership<TestNodeType> {
+    Membership::<TestNodeType>::new(vec![btreeset! {0,1}], None)
 }
 
-fn m123() -> Membership<u64, ()> {
-    Membership::<u64, ()>::new(vec![btreeset! {1,2,3}], None)
+fn m123() -> Membership<TestNodeType> {
+    Membership::<TestNodeType>::new(vec![btreeset! {1,2,3}], None)
 }
 
-fn eng() -> Engine<u64, ()> {
-    let mut eng = Engine::<u64, ()> {
+fn eng() -> Engine<TestNodeType> {
+    let mut eng = Engine::<TestNodeType> {
         id: 2, // make it a member
         ..Default::default()
     };

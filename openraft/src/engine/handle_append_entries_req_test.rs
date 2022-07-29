@@ -3,6 +3,7 @@ use std::sync::Arc;
 use maplit::btreeset;
 use pretty_assertions::assert_eq;
 
+use super::calc_purge_upto_test::TestNodeType;
 use crate::core::ServerState;
 use crate::engine::Command;
 use crate::engine::Engine;
@@ -18,7 +19,7 @@ use crate::MetricsChangeFlags;
 use crate::Vote;
 
 crate::declare_raft_types!(
-    pub(crate) Foo: D=(), R=(), NodeId=u64, NodeData=()
+    pub(crate) Foo: D=(), R=(), NodeType = TestNodeType
 );
 
 fn log_id(term: u64, index: u64) -> LogId<u64> {
@@ -35,20 +36,20 @@ fn blank(term: u64, index: u64) -> Entry<Foo> {
     }
 }
 
-fn m01() -> Membership<u64, ()> {
-    Membership::<u64, ()>::new(vec![btreeset! {0,1}], None)
+fn m01() -> Membership<TestNodeType> {
+    Membership::<TestNodeType>::new(vec![btreeset! {0,1}], None)
 }
 
-fn m23() -> Membership<u64, ()> {
-    Membership::<u64, ()>::new(vec![btreeset! {2,3}], None)
+fn m23() -> Membership<TestNodeType> {
+    Membership::<TestNodeType>::new(vec![btreeset! {2,3}], None)
 }
 
-fn m34() -> Membership<u64, ()> {
-    Membership::<u64, ()>::new(vec![btreeset! {3,4}], None)
+fn m34() -> Membership<TestNodeType> {
+    Membership::<TestNodeType>::new(vec![btreeset! {3,4}], None)
 }
 
-fn eng() -> Engine<u64, ()> {
-    let mut eng = Engine::<u64, ()> {
+fn eng() -> Engine<TestNodeType> {
+    let mut eng = Engine::<TestNodeType> {
         id: 2, // make it a member
         ..Default::default()
     };
