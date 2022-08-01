@@ -1252,6 +1252,8 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
 
         let vote = vote_req.vote;
 
+        let mut tasks = FuturesUnordered::new();
+
         for target in members {
             if target == self.id {
                 continue;
@@ -1262,9 +1264,26 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
             let mut network = self.network.connect(target, target_node.as_ref()).await;
             let tx = self.tx_api.clone();
 
-            let _ = tokio::spawn(
+            let ttl = Duration::from_millis(self.config.heartbeat_interval);
+            let id = self.id;
+
+            let t = tokio::spawn(
                 async move {
-                    let res = network.send_vote(req).await;
+                    let tm_res = timeout(ttl, network.send_vote(req)).await;
+                    let res = match tm_res {
+                        Ok(res) => res,
+
+                        Err(_timeout) => {
+                            let timeout_err = Timeout {
+                                action: RPCTypes::Vote,
+                                id,
+                                target,
+                                timeout: ttl,
+                            };
+                            tracing::error!({error = %timeout_err, target = display(target)}, "timeout");
+                            return;
+                        }
+                    };
 
                     match res {
                         Ok(resp) => {
@@ -1278,7 +1297,14 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
                     "send_vote_req",
                     target = display(target)
                 )),
-            );
+            )
+            .map_err(move |e| (target, e));
+
+            tasks.push(t);
+        }
+
+        while let Some(Err((target, error))) = tasks.next().await {
+            tracing::error!({error=%error, target=display(target)}, "while requesting vote");
         }
     }
 
