@@ -1252,8 +1252,6 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
 
         let vote = vote_req.vote;
 
-        let mut tasks = FuturesUnordered::new();
-
         for target in members {
             if target == self.id {
                 continue;
@@ -1267,7 +1265,7 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
             let ttl = Duration::from_millis(self.config.heartbeat_interval);
             let id = self.id;
 
-            let t = tokio::spawn(
+            let _ = tokio::spawn(
                 async move {
                     let tm_res = timeout(ttl, network.send_vote(req)).await;
                     let res = match tm_res {
@@ -1299,12 +1297,6 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
                 )),
             )
             .map_err(move |e| (target, e));
-
-            tasks.push(t);
-        }
-
-        while let Some(Err((target, error))) = tasks.next().await {
-            tracing::error!({error=%error, target=display(target)}, "while requesting vote");
         }
     }
 
