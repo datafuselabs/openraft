@@ -14,7 +14,7 @@ use byteorder::ReadBytesExt;
 use openraft::async_trait::async_trait;
 use openraft::storage::LogState;
 use openraft::storage::Snapshot;
-use openraft::AnyError;
+use openraft::{AnyError, BasicNode};
 use openraft::EffectiveMembership;
 use openraft::Entry;
 use openraft::EntryPayload;
@@ -41,7 +41,7 @@ pub type ExampleNodeId = u64;
 
 openraft::declare_raft_types!(
     /// Declare the type configuration for example K/V store.
-    pub ExampleTypeConfig: D = ExampleRequest, R = ExampleResponse, NodeId = ExampleNodeId
+    pub ExampleTypeConfig: D = ExampleRequest, R = ExampleResponse, NodeId = ExampleNodeId, Node = BasicNode
 );
 
 /**
@@ -70,7 +70,7 @@ pub struct ExampleResponse {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ExampleSnapshot {
-    pub meta: SnapshotMeta<ExampleNodeId>,
+    pub meta: SnapshotMeta<ExampleNodeId, BasicNode>,
 
     /// The data of the state machine at the time of this snapshot.
     pub data: Vec<u8>,
@@ -87,7 +87,7 @@ pub struct SerializableExampleStateMachine {
     pub last_applied_log: Option<LogId<ExampleNodeId>>,
 
     // TODO: it should not be Option.
-    pub last_membership: EffectiveMembership<ExampleNodeId>,
+    pub last_membership: EffectiveMembership<ExampleNodeId, BasicNode>,
 
     /// Application data.
     pub data: BTreeMap<String, String>,
@@ -162,7 +162,7 @@ fn ct_err<E: Error + 'static>(e: E) -> sled::transaction::ConflictableTransactio
 }
 
 impl ExampleStateMachine {
-    fn get_last_membership(&self) -> StorageResult<EffectiveMembership<ExampleNodeId>> {
+    fn get_last_membership(&self) -> StorageResult<EffectiveMembership<ExampleNodeId, BasicNode>> {
         let state_machine = state_machine(&self.db);
         state_machine
             .get(b"last_membership")
@@ -173,7 +173,7 @@ impl ExampleStateMachine {
                     .unwrap_or_else(|| Ok(EffectiveMembership::default()))
             })
     }
-    async fn set_last_membership(&self, membership: EffectiveMembership<ExampleNodeId>) -> StorageResult<()> {
+    async fn set_last_membership(&self, membership: EffectiveMembership<ExampleNodeId, BasicNode>) -> StorageResult<()> {
         let value = serde_json::to_vec(&membership).map_err(sm_w_err)?;
         let state_machine = state_machine(&self.db);
         state_machine.insert(b"last_membership", value)
@@ -183,7 +183,7 @@ impl ExampleStateMachine {
             .map_err(m_w_err)
             .map(|_| ())
     }
-    fn set_last_membership_tx(&self, tx_state_machine: &sled::transaction::TransactionalTree, membership: EffectiveMembership<ExampleNodeId>)
+    fn set_last_membership_tx(&self, tx_state_machine: &sled::transaction::TransactionalTree, membership: EffectiveMembership<ExampleNodeId, BasicNode>)
                               -> Result<(), sled::transaction::ConflictableTransactionError<AnyError>> {
         let value = serde_json::to_vec(&membership).map_err(ct_err)?;
         tx_state_machine.insert(b"last_membership", value)
@@ -374,11 +374,11 @@ impl SledStore {
         let meta = snap.meta.clone();
         store_tree.insert(b"snapshot", val.as_slice())
             .map_err(|e| StorageError::IO {
-                source: StorageIOError::new(ErrorSubject::Snapshot(snap.meta), ErrorVerb::Write, AnyError::new(&e)),
+                source: StorageIOError::new(ErrorSubject::Snapshot(snap.meta.signature()), ErrorVerb::Write, AnyError::new(&e)),
             })?;
 
         store_tree.flush_async().await
-            .map_err(|e| StorageIOError::new(ErrorSubject::Snapshot(meta), ErrorVerb::Write, AnyError::new(&e)).into())
+            .map_err(|e| StorageIOError::new(ErrorSubject::Snapshot(meta.signature()), ErrorVerb::Write, AnyError::new(&e)).into())
             .map(|_| ())
     }
 }
@@ -447,7 +447,7 @@ impl RaftSnapshotBuilder<ExampleTypeConfig, Cursor<Vec<u8>>> for Arc<SledStore> 
     #[tracing::instrument(level = "trace", skip(self))]
     async fn build_snapshot(
         &mut self,
-    ) -> Result<Snapshot<ExampleNodeId, Cursor<Vec<u8>>>, StorageError<ExampleNodeId>> {
+    ) -> Result<Snapshot<ExampleNodeId, BasicNode, Cursor<Vec<u8>>>, StorageError<ExampleNodeId>> {
         let data;
         let last_applied_log;
         let last_membership;
@@ -582,7 +582,7 @@ impl RaftStorage<ExampleTypeConfig> for Arc<SledStore> {
 
     async fn last_applied_state(
         &mut self,
-    ) -> Result<(Option<LogId<ExampleNodeId>>, EffectiveMembership<ExampleNodeId>), StorageError<ExampleNodeId>> {
+    ) -> Result<(Option<LogId<ExampleNodeId>>, EffectiveMembership<ExampleNodeId, BasicNode>), StorageError<ExampleNodeId>> {
         let state_machine = self.state_machine.read().await;
         Ok((
             state_machine.get_last_applied_log()?,
@@ -647,7 +647,7 @@ impl RaftStorage<ExampleTypeConfig> for Arc<SledStore> {
     #[tracing::instrument(level = "trace", skip(self, snapshot))]
     async fn install_snapshot(
         &mut self,
-        meta: &SnapshotMeta<ExampleNodeId>,
+        meta: &SnapshotMeta<ExampleNodeId, BasicNode>,
         snapshot: Box<Self::SnapshotData>,
     ) -> Result<StateMachineChanges<ExampleTypeConfig>, StorageError<ExampleNodeId>> {
         tracing::info!(
@@ -665,7 +665,7 @@ impl RaftStorage<ExampleTypeConfig> for Arc<SledStore> {
             let updated_state_machine: SerializableExampleStateMachine = serde_json::from_slice(&new_snapshot.data)
                 .map_err(|e| {
                     StorageIOError::new(
-                        ErrorSubject::Snapshot(new_snapshot.meta.clone()),
+                        ErrorSubject::Snapshot(new_snapshot.meta.signature()),
                         ErrorVerb::Read,
                         AnyError::new(&e),
                     )
@@ -684,7 +684,7 @@ impl RaftStorage<ExampleTypeConfig> for Arc<SledStore> {
     #[tracing::instrument(level = "trace", skip(self))]
     async fn get_current_snapshot(
         &mut self,
-    ) -> Result<Option<Snapshot<ExampleNodeId, Self::SnapshotData>>, StorageError<ExampleNodeId>> {
+    ) -> Result<Option<Snapshot<ExampleNodeId, BasicNode, Self::SnapshotData>>, StorageError<ExampleNodeId>> {
         match SledStore::get_current_snapshot_(self)? {
             Some(snapshot) => {
                 let data = snapshot.data.clone();
