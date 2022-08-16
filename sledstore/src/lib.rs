@@ -32,7 +32,9 @@ use openraft::Vote;
 
 use serde::Deserialize;
 use serde::Serialize;
+
 use async_std::sync::RwLock;
+use sled::Transactional;
 
 
 pub type ExampleNodeId = u64;
@@ -151,6 +153,13 @@ fn m_r_err<E: Error + 'static>(e: E) -> StorageError<ExampleNodeId> {
 fn m_w_err<E: Error + 'static>(e: E) -> StorageError<ExampleNodeId> {
     StorageIOError::new(ErrorSubject::Store, ErrorVerb::Write, AnyError::new(&e)).into()
 }
+fn t_err<E: Error + 'static>(e: E) -> StorageError<ExampleNodeId> {
+    StorageIOError::new(ErrorSubject::Store, ErrorVerb::Write, AnyError::new(&e)).into()
+}
+
+fn ct_err<E: Error + 'static>(e: E) -> sled::transaction::ConflictableTransactionError<AnyError> {
+    sled::transaction::ConflictableTransactionError::Abort(AnyError::new(&e))
+}
 
 impl ExampleStateMachine {
     fn get_last_membership(&self) -> StorageResult<EffectiveMembership<ExampleNodeId>> {
@@ -174,6 +183,13 @@ impl ExampleStateMachine {
             .map_err(m_w_err)
             .map(|_| ())
     }
+    fn set_last_membership_tx(&self, tx_state_machine: &sled::transaction::TransactionalTree, membership: EffectiveMembership<ExampleNodeId>)
+                              -> Result<(), sled::transaction::ConflictableTransactionError<AnyError>> {
+        let value = serde_json::to_vec(&membership).map_err(ct_err)?;
+        tx_state_machine.insert(b"last_membership", value)
+            .map_err(ct_err)?;
+        Ok(())
+    }
     fn get_last_applied_log(&self) -> StorageResult<Option<LogId<ExampleNodeId>>> {
         let state_machine = state_machine(&self.db);
         state_machine
@@ -191,6 +207,13 @@ impl ExampleStateMachine {
             .map_err(l_r_err)
             .map(|_| ())
     }
+    fn set_last_applied_log_tx(&self, tx_state_machine: &sled::transaction::TransactionalTree, log_id: LogId<ExampleNodeId>)
+                               -> Result<(), sled::transaction::ConflictableTransactionError<AnyError>> {
+        let value =  serde_json::to_vec(&log_id).map_err(ct_err)?;
+        tx_state_machine.insert(b"last_applied_log", value)
+            .map_err(ct_err)?;
+        Ok(())
+    }
     async fn from_serializable(sm: SerializableExampleStateMachine, db: Arc<sled::Db>) -> StorageResult<Self> {
         let data_tree = data(&db);
         let mut batch = sled::Batch::default();
@@ -205,7 +228,7 @@ impl ExampleStateMachine {
         if let Some(log_id) = sm.last_applied_log {
             r.set_last_applied_log(log_id).await?;
         }
-        r.set_last_membership(sm.last_membership).await?;
+        r.set_last_membership(sm.last_membership, ).await?;
 
         Ok(r)
     }
@@ -213,14 +236,11 @@ impl ExampleStateMachine {
     fn new(db: Arc<sled::Db>) -> ExampleStateMachine {
         Self { db }
     }
-    async fn insert(&self, key: String, value: String) -> StorageResult<()> {
-        let data_tree = data(&self.db);
-        data_tree.insert(key.as_bytes(), value.as_bytes())
-            .map_err(s_w_err)?;
-
-        data_tree.flush_async().await
-            .map_err(s_w_err)
-            .map(|_| ())
+    fn insert_tx(&self, tx_data_tree: &sled::transaction::TransactionalTree, key: String, value: String)
+                 -> Result<(), sled::transaction::ConflictableTransactionError<AnyError>> {
+        tx_data_tree.insert(key.as_bytes(), value.as_bytes())
+            .map_err(ct_err)?;
+        Ok(())
     }
     pub fn get(&self, key: &str) -> StorageResult<Option<String>> {
         let key = key.as_bytes();
@@ -575,35 +595,44 @@ impl RaftStorage<ExampleTypeConfig> for Arc<SledStore> {
         &mut self,
         entries: &[&Entry<ExampleTypeConfig>],
     ) -> Result<Vec<ExampleResponse>, StorageError<ExampleNodeId>> {
-        let mut res = Vec::with_capacity(entries.len());
 
         let sm = self.state_machine.write().await;
+        let state_machine = state_machine(&self.db);
+        let data_tree = data(&self.db);
+        let trans_res = (&state_machine, &data_tree).transaction(
+            |(tx_state_machine, tx_data_tree)| {
+                let mut res = Vec::with_capacity(entries.len());
 
-        for entry in entries {
-            tracing::debug!(%entry.log_id, "replicate to sm");
+                for entry in entries {
+                    tracing::debug!(%entry.log_id, "replicate to sm");
 
-            sm.set_last_applied_log(entry.log_id).await?;
+                    sm.set_last_applied_log_tx(&tx_state_machine, entry.log_id)?;
 
-            match entry.payload {
-                EntryPayload::Blank => res.push(ExampleResponse { value: None }),
-                EntryPayload::Normal(ref req) => match req {
-                    ExampleRequest::Set { key, value } => {
-                        sm.insert(key.clone(), value.clone()).await?;
-                        res.push(ExampleResponse {
-                            value: Some(value.clone()),
-                        })
-                    }
-                },
-                EntryPayload::Membership(ref mem) => {
-                    sm.set_last_membership(EffectiveMembership::new(Some(entry.log_id), mem.clone())).await?;
-                    res.push(ExampleResponse { value: None })
+                    match entry.payload {
+                        EntryPayload::Blank => res.push(ExampleResponse { value: None }),
+                        EntryPayload::Normal(ref req) => match req {
+                            ExampleRequest::Set { key, value } => {
+                                sm.insert_tx(&tx_data_tree, key.clone(), value.clone())?;
+                                res.push(ExampleResponse {
+                                    value: Some(value.clone()),
+                                })
+                            }
+                        },
+                        EntryPayload::Membership(ref mem) => {
+                            let membership = EffectiveMembership::new(Some(entry.log_id), mem.clone());
+                            sm.set_last_membership_tx(&tx_state_machine, membership)?;
+                            res.push(ExampleResponse { value: None })
+                        }
+                    };
                 }
-            };
-        }
+                Ok(res)
+            });
+        let result_vec = trans_res.map_err(t_err)?;
+
         self.db
             .flush_async().await
             .map_err(|e| StorageIOError::new(ErrorSubject::Logs, ErrorVerb::Write, AnyError::new(&e)))?;
-        Ok(res)
+        Ok(result_vec)
     }
 
     async fn get_snapshot_builder(&mut self) -> Self::SnapshotBuilder {
