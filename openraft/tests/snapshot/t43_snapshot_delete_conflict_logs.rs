@@ -41,6 +41,7 @@ async fn snapshot_delete_conflicting_logs() -> Result<()> {
             snapshot_policy: SnapshotPolicy::LogsSinceLast(snapshot_threshold),
             max_applied_log_to_keep: 0,
             purge_batch_size: 1,
+            enable_heartbeat: false,
             ..Default::default()
         }
         .validate()?,
@@ -114,7 +115,7 @@ async fn snapshot_delete_conflicting_logs() -> Result<()> {
             ],
             leader_commit: Some(LogId::new(LeaderId::new(0, 0), 0)),
         };
-        router.connect(1, None).await.send_append_entries(req).await?;
+        router.connect(1, &()).await?.send_append_entries(req).await?;
 
         tracing::info!("--- check that learner membership is affected");
         {
@@ -145,7 +146,7 @@ async fn snapshot_delete_conflicting_logs() -> Result<()> {
             done: true,
         };
 
-        router.connect(1, None).await.send_install_snapshot(req).await?;
+        router.connect(1, &()).await?.send_install_snapshot(req).await?;
 
         tracing::info!("--- DONE installing snapshot");
 

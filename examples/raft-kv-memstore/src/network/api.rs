@@ -4,8 +4,7 @@ use actix_web::web::Data;
 use actix_web::Responder;
 use openraft::error::CheckIsLeaderError;
 use openraft::error::Infallible;
-use openraft::raft::ClientWriteRequest;
-use openraft::EntryPayload;
+use openraft::BasicNode;
 use web::Json;
 
 use crate::app::ExampleApp;
@@ -23,8 +22,7 @@ use crate::ExampleNodeId;
  */
 #[post("/write")]
 pub async fn write(app: Data<ExampleApp>, req: Json<ExampleRequest>) -> actix_web::Result<impl Responder> {
-    let request = ClientWriteRequest::new(EntryPayload::Normal(req.0));
-    let response = app.raft.client_write(request).await;
+    let response = app.raft.client_write(req.0).await;
     Ok(Json(response))
 }
 
@@ -48,7 +46,7 @@ pub async fn consistent_read(app: Data<ExampleApp>, req: Json<String>) -> actix_
             let key = req.0;
             let value = state_machine.data.get(&key).cloned();
 
-            let res: Result<String, CheckIsLeaderError<ExampleNodeId>> = Ok(value.unwrap_or_default());
+            let res: Result<String, CheckIsLeaderError<ExampleNodeId, BasicNode>> = Ok(value.unwrap_or_default());
             Ok(Json(res))
         }
         Err(e) => Ok(Json(Err(e))),

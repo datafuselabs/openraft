@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use crate::core::ServerState;
@@ -12,6 +11,7 @@ use crate::error::RejectVoteRequest;
 use crate::internal_server_state::InternalServerState;
 use crate::membership::EffectiveMembership;
 use crate::membership::NodeRole;
+use crate::node::Node;
 use crate::progress::Progress;
 use crate::raft::AppendEntriesResponse;
 use crate::raft::VoteRequest;
@@ -63,7 +63,11 @@ impl Default for EngineConfig {
 /// TODO: make the fields private
 #[derive(Debug, Clone, Default)]
 #[derive(PartialEq, Eq)]
-pub(crate) struct Engine<NID: NodeId> {
+pub(crate) struct Engine<NID, N>
+where
+    N: Node,
+    NID: NodeId,
+{
     /// TODO:
     #[allow(dead_code)]
     pub(crate) id: NID,
@@ -76,17 +80,21 @@ pub(crate) struct Engine<NID: NodeId> {
     pub(crate) snapshot_last_log_id: Option<LogId<NID>>,
 
     /// The state of this raft node.
-    pub(crate) state: RaftState<NID>,
+    pub(crate) state: RaftState<NID, N>,
 
     /// Tracks what kind of metrics changed
     pub(crate) metrics_flags: MetricsChangeFlags,
 
     /// Command queue that need to be executed by `RaftRuntime`.
-    pub(crate) commands: Vec<Command<NID>>,
+    pub(crate) commands: Vec<Command<NID, N>>,
 }
 
-impl<NID: NodeId> Engine<NID> {
-    pub(crate) fn new(id: NID, init_state: &RaftState<NID>, config: EngineConfig) -> Self {
+impl<NID, N> Engine<NID, N>
+where
+    N: Node,
+    NID: NodeId,
+{
+    pub(crate) fn new(id: NID, init_state: &RaftState<NID, N>, config: EngineConfig) -> Self {
         Self {
             id,
             config,
@@ -105,7 +113,10 @@ impl<NID: NodeId> Engine<NID> {
     /// Appending the very first log is slightly different from appending log by a leader or follower.
     /// This step is not confined by the consensus protocol and has to be dealt with differently.
     #[tracing::instrument(level = "debug", skip(self, entries))]
-    pub(crate) fn initialize<Ent: RaftEntry<NID>>(&mut self, entries: &mut [Ent]) -> Result<(), InitializeError<NID>> {
+    pub(crate) fn initialize<Ent: RaftEntry<NID, N>>(
+        &mut self,
+        entries: &mut [Ent],
+    ) -> Result<(), InitializeError<NID, N>> {
         let l = entries.len();
         debug_assert_eq!(1, l);
 
@@ -145,11 +156,7 @@ impl<NID: NodeId> Engine<NID> {
         // Fast-path: if there is only one node in the cluster.
 
         if quorum_granted {
-            self.state.vote.commit();
-            self.push_command(Command::SaveVote { vote: self.state.vote });
-
-            // TODO: For compatibility. remove it. The runtime does not need to know about server state.
-            self.set_server_state(ServerState::Leader);
+            self.establish_leader();
             return;
         }
 
@@ -228,15 +235,7 @@ impl<NID: NodeId> Engine<NID> {
             let quorum_granted = leader.is_vote_granted();
             if quorum_granted {
                 tracing::debug!("quorum granted vote");
-
-                self.state.vote.commit();
-                // Saving the vote that is granted by a quorum, AKA committed vote, is not necessary by original raft.
-                // Openraft insists doing this because:
-                // - Voting is not in the hot path, thus no performance penalty.
-                // - Leadership won't be lost if a leader restarted quick enough.
-                self.push_command(Command::SaveVote { vote: self.state.vote });
-
-                self.set_server_state(ServerState::Leader);
+                self.establish_leader();
             }
             return;
         }
@@ -255,8 +254,9 @@ impl<NID: NodeId> Engine<NID> {
         }
 
         // Seen a higher log.
+        // TODO: if already installed a timer with can_be_leader==false, it should not install a timer with
+        //       can_be_leader==true.
         if resp.last_log_id > self.state.last_log_id() {
-            // TODO: if my log is greater, install a smaller election timeout.
             self.push_command(Command::InstallElectionTimer { can_be_leader: false });
         } else {
             self.push_command(Command::InstallElectionTimer { can_be_leader: true });
@@ -264,17 +264,10 @@ impl<NID: NodeId> Engine<NID> {
 
         debug_assert!(self.is_voter());
 
-        if self.state.internal_server_state.is_following() {
-            return;
-        }
-
-        // TODO:  use enter_following()
-        // self.enter_following();
-        {
-            self.state.internal_server_state = InternalServerState::Following;
-
-            self.set_server_state(ServerState::Follower);
-        }
+        // When vote is rejected, it does not need to leave candidate state.
+        // Candidate loop, follower loop and learner loop are totally the same.
+        //
+        // The only thing that needs to do is update election timer.
     }
 
     /// Append new log entries by a leader.
@@ -287,7 +280,7 @@ impl<NID: NodeId> Engine<NID> {
     /// TODO(xp): metrics flag needs to be dealt with.
     /// TODO(xp): if vote indicates this node is not the leader, refuse append
     #[tracing::instrument(level = "debug", skip(self, entries))]
-    pub(crate) fn leader_append_entries<'a, Ent: RaftEntry<NID> + 'a>(&mut self, entries: &mut [Ent]) {
+    pub(crate) fn leader_append_entries<'a, Ent: RaftEntry<NID, N> + 'a>(&mut self, entries: &mut [Ent]) {
         let l = entries.len();
         if l == 0 {
             return;
@@ -342,7 +335,9 @@ impl<NID: NodeId> Engine<NID> {
         }
 
         // Still need to replicate to learners, even when it is fast-committed.
-        self.push_command(Command::ReplicateInputEntries { range: 0..l });
+        self.push_command(Command::ReplicateEntries {
+            upto: Some(*entries.last().unwrap().get_log_id()),
+        });
         self.push_command(Command::MoveInputCursorBy { n: l });
     }
 
@@ -358,7 +353,7 @@ impl<NID: NodeId> Engine<NID> {
         leader_committed: Option<LogId<NID>>,
     ) -> AppendEntriesResponse<NID>
     where
-        Ent: RaftEntry<NID> + MessageSummary<Ent> + 'a,
+        Ent: RaftEntry<NID, N> + MessageSummary<Ent> + 'a,
     {
         tracing::debug!(
             vote = display(vote),
@@ -370,7 +365,7 @@ impl<NID: NodeId> Engine<NID> {
         tracing::debug!(
             my_vote = display(self.state.vote),
             my_last_log_id = display(self.state.last_log_id().summary()),
-            my_last_applied = display(self.state.last_applied.summary()),
+            my_committed = display(self.state.committed.summary()),
             "local state"
         );
 
@@ -415,7 +410,7 @@ impl<NID: NodeId> Engine<NID> {
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    pub(crate) fn follower_commit_entries<'a, Ent: RaftEntry<NID> + 'a>(
+    pub(crate) fn follower_commit_entries<'a, Ent: RaftEntry<NID, N> + 'a>(
         &mut self,
         leader_committed: Option<LogId<NID>>,
         prev_log_id: Option<LogId<NID>>,
@@ -436,7 +431,7 @@ impl<NID: NodeId> Engine<NID> {
         if let Some(prev_committed) = self.state.update_committed(&committed) {
             self.push_command(Command::FollowerCommit {
                 // TODO(xp): when restart, commit is reset to None. Use last_applied instead.
-                since: prev_committed,
+                already_committed: prev_committed,
                 upto: committed.unwrap(),
             });
             self.purge_applied_log();
@@ -451,7 +446,11 @@ impl<NID: NodeId> Engine<NID> {
     ///
     /// Membership config changes are also detected and applied here.
     #[tracing::instrument(level = "debug", skip(self, entries))]
-    pub(crate) fn follower_do_append_entries<'a, Ent: RaftEntry<NID> + 'a>(&mut self, entries: &[Ent], since: usize) {
+    pub(crate) fn follower_do_append_entries<'a, Ent: RaftEntry<NID, N> + 'a>(
+        &mut self,
+        entries: &[Ent],
+        since: usize,
+    ) {
         let l = entries.len();
         if since == l {
             return;
@@ -623,7 +622,7 @@ impl<NID: NodeId> Engine<NID> {
 
     /// Update membership state with a committed membership config
     #[tracing::instrument(level = "debug", skip_all)]
-    pub(crate) fn update_committed_membership(&mut self, membership: EffectiveMembership<NID>) {
+    pub(crate) fn update_committed_membership(&mut self, membership: EffectiveMembership<NID, N>) {
         tracing::debug!("update committed membership: {}", membership.summary());
 
         let server_state = self.calc_server_state();
@@ -659,10 +658,8 @@ impl<NID: NodeId> Engine<NID> {
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    pub(crate) fn update_effective_membership(&mut self, log_id: &LogId<NID>, m: &Membership<NID>) {
+    pub(crate) fn update_effective_membership(&mut self, log_id: &LogId<NID>, m: &Membership<NID, N>) {
         tracing::debug!("update effective membership: log_id:{} {}", log_id, m.summary());
-
-        self.metrics_flags.set_cluster_changed();
 
         let server_state = self.calc_server_state();
 
@@ -678,33 +675,14 @@ impl<NID: NodeId> Engine<NID> {
         if let Some(leader) = &mut self.state.internal_server_state.leading_mut() {
             let old_progress = leader.progress.clone();
 
-            let old_repls = old_progress.iter().copied().collect::<BTreeMap<_, _>>();
-
             let learner_ids = em.learner_ids().collect::<Vec<_>>();
 
             leader.progress = old_progress.upgrade_quorum_set(em, &learner_ids);
+        }
 
-            // If it is leader, update replication to reflect membership change.
-
-            let new_repls = leader.progress.iter().copied().collect::<BTreeMap<_, _>>();
-
-            // TODO: test
-            let mut add = vec![];
-            let mut remove = vec![];
-            for (node_id, matched) in new_repls.iter() {
-                if !old_repls.contains_key(node_id) {
-                    add.push((*node_id, *matched));
-                }
-            }
-
-            for (node_id, matched) in old_repls.iter() {
-                // A leader that is removed will be shut down when this membership log is committed.
-                if !new_repls.contains_key(node_id) && node_id != &self.id {
-                    remove.push((*node_id, *matched));
-                }
-            }
-
-            self.push_command(Command::UpdateReplicationStreams { remove, add });
+        // A leader that is removed will be shut down when this membership log is committed.
+        if self.state.internal_server_state.is_leading() {
+            self.update_replications()
         }
 
         // Leader should not quit at once.
@@ -763,7 +741,7 @@ impl<NID: NodeId> Engine<NID> {
                 committed: self.state.committed,
             });
             self.push_command(Command::LeaderCommit {
-                since: prev_committed,
+                already_committed: prev_committed,
                 upto: self.state.committed.unwrap(),
             });
             self.purge_applied_log();
@@ -772,32 +750,45 @@ impl<NID: NodeId> Engine<NID> {
 
     // --- Draft API ---
 
-    // // --- app API ---
-    //
-    // /// Write a new log entry.
-    // pub(crate) fn write(&mut self) -> Result<Vec<AlgoCmd<NID>>, ForwardToLeader<NID>> {}
-    //
     // // --- raft protocol API ---
     //
     // pub(crate) fn handle_install_snapshot() {}
     //
-    // pub(crate) fn handle_append_entries_resp() {}
     // pub(crate) fn handle_install_snapshot_resp() {}
 }
 
 /// Supporting util
-impl<NID: NodeId> Engine<NID> {
-    /// Enter leader state.
+impl<NID, N> Engine<NID, N>
+where
+    N: Node,
+    NID: NodeId,
+{
+    /// Enter leading or following state by checking `vote`.
+    ///
+    /// `vote.node_id == self.id`: Leading state;
+    /// `vote.node_id != self.id`: Following state;
+    pub(crate) fn switch_internal_server_state(&mut self) {
+        if self.state.vote.node_id == self.id {
+            self.enter_leading();
+        } else {
+            self.enter_following();
+        }
+    }
+
+    /// Enter leading state(vote.node_id == self.id) .
     ///
     /// Leader state has two phase: election phase and replication phase, similar to paxos phase-1 and phase-2
     pub(crate) fn enter_leading(&mut self) {
         debug_assert_eq!(self.state.vote.node_id, self.id);
+        // debug_assert!(
+        //     self.state.internal_server_state.is_following(),
+        //     "can not enter leading twice"
+        // );
 
         self.state.new_leader();
-        // TODO: install heartbeat timer
     }
 
-    /// Leave leader state.
+    /// Leave leading state and enter following state(vote.node_id != self.id).
     ///
     /// This node then becomes raft-follower or raft-learner.
     pub(crate) fn enter_following(&mut self) {
@@ -808,16 +799,19 @@ impl<NID: NodeId> Engine<NID> {
         //       This way it holds that 'vote.node_id != self.id <=> following state`.
         // debug_assert_ne!(self.state.vote.node_id, self.id);
 
+        // debug_assert!(
+        //     self.state.internal_server_state.is_leading(),
+        //     "can not enter following twice"
+        // );
+
         let vote = &self.state.vote;
 
+        // TODO: installing election timer should be driven by change of last-log-id
         if vote.committed {
             // There is an active leader.
             // Do not elect for a longer while.
             // TODO: Installing a timer should not be part of the Engine's job.
             self.push_command(Command::InstallElectionTimer { can_be_leader: false });
-            // There is an active leader, reject election for a while.
-            // TODO: remove this when heartbeat log is ready.
-            self.push_command(Command::RejectElection {});
         } else {
             // There is an active candidate.
             // Do not elect for a short while.
@@ -837,8 +831,48 @@ impl<NID: NodeId> Engine<NID> {
         }
     }
 
+    /// Vote is granted by a quorum, leader established.
+    fn establish_leader(&mut self) {
+        self.state.vote.commit();
+        // Saving the vote that is granted by a quorum, AKA committed vote, is not necessary by original raft.
+        // Openraft insists doing this because:
+        // - Voting is not in the hot path, thus no performance penalty.
+        // - Leadership won't be lost if a leader restarted quick enough.
+        self.push_command(Command::SaveVote { vote: self.state.vote });
+
+        self.set_server_state(ServerState::Leader);
+        self.update_replications();
+
+        // Only when a log with current `vote` is replicated to a quorum, the logs are considered committed.
+        self.append_blank_log();
+    }
+
+    fn append_blank_log(&mut self) {
+        let log_id = LogId {
+            leader_id: self.state.vote.leader_id(),
+            index: self.state.last_log_id().next_index(),
+        };
+        self.state.log_ids.append(log_id);
+        self.push_command(Command::AppendBlankLog { log_id });
+        self.update_progress(self.id, Some(log_id));
+        self.push_command(Command::ReplicateEntries { upto: Some(log_id) });
+    }
+
+    /// update replication streams to reflect replication progress change.
+    fn update_replications(&mut self) {
+        if let Some(leader) = self.state.internal_server_state.leading() {
+            let mut targets = vec![];
+            for (node_id, matched) in leader.progress.iter() {
+                if node_id != &self.id {
+                    targets.push((*node_id, *matched));
+                }
+            }
+            self.push_command(Command::UpdateReplicationStreams { targets });
+        }
+    }
+
     /// Update effective membership config if encountering a membership config log entry.
-    fn try_update_membership<Ent: RaftEntry<NID>>(&mut self, entry: &Ent) {
+    fn try_update_membership<Ent: RaftEntry<NID, N>>(&mut self, entry: &Ent) {
         if let Some(m) = entry.get_membership() {
             self.update_effective_membership(entry.get_log_id(), m);
         }
@@ -846,7 +880,7 @@ impl<NID: NodeId> Engine<NID> {
 
     /// Update membership state if membership config entries are found.
     #[allow(dead_code)]
-    fn follower_update_membership<'a, Ent: RaftEntry<NID> + 'a>(
+    fn follower_update_membership<'a, Ent: RaftEntry<NID, N> + 'a>(
         &mut self,
         entries: impl DoubleEndedIterator<Item = &'a Ent>,
     ) {
@@ -880,9 +914,9 @@ impl<NID: NodeId> Engine<NID> {
     /// when conflicting logs are found.
     ///
     /// See: [Effective-membership](https://datafuselabs.github.io/openraft/effective-membership.html)
-    fn last_two_memberships<'a, Ent: RaftEntry<NID> + 'a>(
+    fn last_two_memberships<'a, Ent: RaftEntry<NID, N> + 'a>(
         entries: impl DoubleEndedIterator<Item = &'a Ent>,
-    ) -> Vec<EffectiveMembership<NID>> {
+    ) -> Vec<EffectiveMembership<NID, N>> {
         let mut memberships = vec![];
 
         // Find the last 2 membership config entries: the committed and the effective.
@@ -901,7 +935,7 @@ impl<NID: NodeId> Engine<NID> {
     /// Update membership state with the last 2 membership configs found in new log entries
     ///
     /// Return if new membership config is found
-    fn update_membership_state(&mut self, memberships: Vec<EffectiveMembership<NID>>) {
+    fn update_membership_state(&mut self, memberships: Vec<EffectiveMembership<NID, N>>) {
         debug_assert!(self.state.membership_state.effective.log_id < memberships[0].log_id);
 
         let new_mem_state = if memberships.len() == 1 {
@@ -935,17 +969,9 @@ impl<NID: NodeId> Engine<NID> {
     fn set_server_state(&mut self, server_state: ServerState) {
         tracing::debug!(id = display(self.id), ?server_state, "set_server_state");
 
-        // TODO: the caller should be very sure about what server-state to set.
-        //       The following condition check is copied from old code,
-        //       and should be removed.
-        //       And currently just use a panic to indicate the new code in Engine should not reach this point.
-        // if server_state == State::Follower && !self.state.membership_state.effective.membership.is_member(&self.id) {
-        //     self.state.target_state = State::Learner;
-        // } else {
-        //     self.state.target_state = server_state;
-        // }
-        if server_state == ServerState::Follower && !self.state.membership_state.effective.is_voter(&self.id) {
-            unreachable!("caller does not know what to do?")
+        // TODO: remove this: the caller should know when to switch server state.
+        if self.state.server_state == server_state {
+            return;
         }
 
         self.state.server_state = server_state;
@@ -970,7 +996,7 @@ impl<NID: NodeId> Engine<NID> {
     }
 
     /// When initialize, the node that accept initialize request has to be a member of the initial config.
-    fn check_members_contain_me(&self, m: &Membership<NID>) -> Result<(), NotInMembers<NID>> {
+    fn check_members_contain_me(&self, m: &Membership<NID, N>) -> Result<(), NotInMembers<NID, N>> {
         if !m.is_voter(&self.id) {
             let e = NotInMembers {
                 node_id: self.id,
@@ -1006,7 +1032,7 @@ impl<NID: NodeId> Engine<NID> {
         l
     }
 
-    fn assign_log_ids<'a, Ent: RaftEntry<NID> + 'a>(&mut self, entries: impl Iterator<Item = &'a mut Ent>) {
+    fn assign_log_ids<'a, Ent: RaftEntry<NID, N> + 'a>(&mut self, entries: impl Iterator<Item = &'a mut Ent>) {
         let mut log_id = LogId::new(self.state.vote.leader_id(), self.state.last_log_id().next_index());
         for entry in entries {
             entry.set_log_id(&log_id);
@@ -1030,7 +1056,7 @@ impl<NID: NodeId> Engine<NID> {
             return Err(RejectVoteRequest::ByVote(self.state.vote));
         }
 
-        tracing::debug!(%vote, "grant vote" );
+        tracing::debug!(%vote, "vote is changing to" );
 
         // Grant the vote
 
@@ -1039,11 +1065,7 @@ impl<NID: NodeId> Engine<NID> {
             self.push_command(Command::SaveVote { vote: *vote });
         }
 
-        if self.state.vote.node_id == self.id {
-            self.enter_leading();
-        } else {
-            self.enter_following();
-        }
+        self.switch_internal_server_state();
 
         Ok(())
     }
@@ -1075,7 +1097,6 @@ impl<NID: NodeId> Engine<NID> {
 
     /// The node is candidate or leader
     fn is_becoming_leader(&self) -> bool {
-        // self.state.vote.node_id == self.id
         self.state.internal_server_state.is_leading()
     }
 
@@ -1083,7 +1104,7 @@ impl<NID: NodeId> Engine<NID> {
         self.state.vote.node_id == self.id && self.state.vote.committed
     }
 
-    fn push_command(&mut self, cmd: Command<NID>) {
+    fn push_command(&mut self, cmd: Command<NID, N>) {
         cmd.update_metrics_flags(&mut self.metrics_flags);
         self.commands.push(cmd)
     }

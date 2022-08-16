@@ -6,39 +6,49 @@ use maplit::btreemap;
 
 use crate::error::MissingNodeInfo;
 use crate::membership::NodeRole;
+use crate::node::Node;
 use crate::quorum::AsJoint;
 use crate::quorum::FindCoherent;
 use crate::quorum::Joint;
 use crate::quorum::QuorumSet;
 use crate::MessageSummary;
-use crate::Node;
 use crate::NodeId;
 
 /// Convert other types into the internal data structure for node infos
-pub trait IntoOptionNodes<NID: NodeId> {
-    fn into_option_nodes(self) -> BTreeMap<NID, Option<Node>>;
+pub trait IntoOptionNodes<NID, N>
+where
+    N: Node,
+    NID: NodeId,
+{
+    fn into_option_nodes(self) -> BTreeMap<NID, N>;
 }
 
-impl<NID: NodeId> IntoOptionNodes<NID> for () {
-    fn into_option_nodes(self) -> BTreeMap<NID, Option<Node>> {
+impl<NID, N> IntoOptionNodes<NID, N> for ()
+where
+    N: Node,
+    NID: NodeId,
+{
+    fn into_option_nodes(self) -> BTreeMap<NID, N> {
         btreemap! {}
     }
 }
 
-impl<NID: NodeId> IntoOptionNodes<NID> for BTreeSet<NID> {
-    fn into_option_nodes(self) -> BTreeMap<NID, Option<Node>> {
-        self.into_iter().map(|node_id| (node_id, None)).collect()
+impl<NID, N> IntoOptionNodes<NID, N> for BTreeSet<NID>
+where
+    N: Node,
+    NID: NodeId,
+{
+    fn into_option_nodes(self) -> BTreeMap<NID, N> {
+        self.into_iter().map(|node_id| (node_id, N::default())).collect()
     }
 }
 
-impl<NID: NodeId> IntoOptionNodes<NID> for BTreeMap<NID, Node> {
-    fn into_option_nodes(self) -> BTreeMap<NID, Option<Node>> {
-        self.into_iter().map(|(node_id, n)| (node_id, Some(n))).collect()
-    }
-}
-
-impl<NID: NodeId> IntoOptionNodes<NID> for BTreeMap<NID, Option<Node>> {
-    fn into_option_nodes(self) -> BTreeMap<NID, Option<Node>> {
+impl<NID, N> IntoOptionNodes<NID, N> for BTreeMap<NID, N>
+where
+    N: Node,
+    NID: NodeId,
+{
+    fn into_option_nodes(self) -> BTreeMap<NID, N> {
         self
     }
 }
@@ -49,7 +59,11 @@ impl<NID: NodeId> IntoOptionNodes<NID> for BTreeMap<NID, Option<Node>> {
 /// every config.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize), serde(bound = ""))]
-pub struct Membership<NID: NodeId> {
+pub struct Membership<NID, N>
+where
+    N: Node,
+    NID: NodeId,
+{
     /// Multi configs of members.
     ///
     /// AKA a joint config in original raft paper.
@@ -58,22 +72,27 @@ pub struct Membership<NID: NodeId> {
     /// Additional info of all nodes, e.g., the connecting host and port.
     ///
     /// A node-id key that is in `nodes` but is not in `configs` is a **learner**.
-    /// The values in this map must all be `Some` or `None`.
-    nodes: BTreeMap<NID, Option<Node>>,
+    nodes: BTreeMap<NID, N>,
 }
 
-impl<NID: NodeId> TryFrom<BTreeMap<NID, Option<Node>>> for Membership<NID> {
-    type Error = MissingNodeInfo<NID>;
-
-    fn try_from(b: BTreeMap<NID, Option<Node>>) -> Result<Self, Self::Error> {
+impl<NID, N> From<BTreeMap<NID, N>> for Membership<NID, N>
+where
+    N: Node,
+    NID: NodeId,
+{
+    fn from(b: BTreeMap<NID, N>) -> Self {
         let member_ids = b.keys().cloned().collect::<BTreeSet<NID>>();
 
-        let membership = Membership::with_nodes(vec![member_ids], b)?;
-        Ok(membership)
+        // Safe unwrap: every node-id in `member_ids` present in `b`.
+        Membership::with_nodes(vec![member_ids], b).unwrap()
     }
 }
 
-impl<NID: NodeId> MessageSummary<Membership<NID>> for Membership<NID> {
+impl<NID, N> MessageSummary<Membership<NID, N>> for Membership<NID, N>
+where
+    N: Node,
+    NID: NodeId,
+{
     fn summary(&self) -> String {
         let mut res = vec!["members:[".to_string()];
         for (i, c) in self.configs.iter().enumerate() {
@@ -88,9 +107,8 @@ impl<NID: NodeId> MessageSummary<Membership<NID>> for Membership<NID> {
                 }
                 res.push(format!("{}", node_id));
 
-                if let Some(n) = self.get_node(node_id) {
-                    res.push(format!(":{{{}}}", n));
-                }
+                let n = self.get_node(node_id);
+                res.push(format!(":{{{:?}}}", n));
             }
             res.push("}".to_string());
         }
@@ -107,16 +125,19 @@ impl<NID: NodeId> MessageSummary<Membership<NID>> for Membership<NID> {
 
             res.push(format!("{}", learner_id));
 
-            if let Some(n) = self.get_node(learner_id) {
-                res.push(format!(":{{{}}}", n));
-            }
+            let n = self.get_node(learner_id);
+            res.push(format!(":{{{:?}}}", n));
         }
         res.push("]".to_string());
         res.join("")
     }
 }
 
-impl<NID: NodeId> Membership<NID> {
+impl<NID, N> Membership<NID, N>
+where
+    N: Node,
+    NID: NodeId,
+{
     /// Create a new Membership of multiple configs(joint) and optionally a set of learner node ids.
     ///
     /// A node id that is in `node_ids` but is not in `configs` is a **learner**.
@@ -144,7 +165,7 @@ impl<NID: NodeId> Membership<NID> {
     ///   ids not in `configs` are learner node ids. In this case, every node id in `configs` has to present in `nodes`
     ///   or an error will be returned.
     pub(crate) fn with_nodes<T>(configs: Vec<BTreeSet<NID>>, nodes: T) -> Result<Self, MissingNodeInfo<NID>>
-    where T: IntoOptionNodes<NID> {
+    where T: IntoOptionNodes<NID, N> {
         let nodes = nodes.into_option_nodes();
 
         for voter_id in configs.as_joint().ids() {
@@ -156,17 +177,6 @@ impl<NID: NodeId> Membership<NID> {
             }
         }
 
-        let has_some = nodes.values().any(|x| x.is_some());
-        if has_some {
-            let first_none = nodes.iter().find(|(_node_id, v)| v.is_none());
-            if let Some(first_none) = first_none {
-                return Err(MissingNodeInfo {
-                    node_id: *first_none.0,
-                    reason: "is None".to_string(),
-                });
-            }
-        }
-
         Ok(Membership { configs, nodes })
     }
 
@@ -174,10 +184,7 @@ impl<NID: NodeId> Membership<NID> {
     ///
     /// Node that present in `old` will **NOT** be replaced because changing the address of a node potentially breaks
     /// consensus guarantee.
-    pub(crate) fn extend_nodes(
-        old: BTreeMap<NID, Option<Node>>,
-        new: &BTreeMap<NID, Option<Node>>,
-    ) -> BTreeMap<NID, Option<Node>> {
+    pub(crate) fn extend_nodes(old: BTreeMap<NID, N>, new: &BTreeMap<NID, N>) -> BTreeMap<NID, N> {
         let mut res = old;
 
         for (k, v) in new.iter() {
@@ -195,7 +202,7 @@ impl<NID: NodeId> Membership<NID> {
         self.configs.len() > 1
     }
 
-    pub(crate) fn add_learner(&self, node_id: NID, node: Option<Node>) -> Result<Self, MissingNodeInfo<NID>> {
+    pub(crate) fn add_learner(&self, node_id: NID, node: N) -> Result<Self, MissingNodeInfo<NID>> {
         let configs = self.configs.clone();
 
         let nodes = Self::extend_nodes(self.nodes.clone(), &btreemap! {node_id=>node});
@@ -207,7 +214,11 @@ impl<NID: NodeId> Membership<NID> {
 }
 
 /// Membership API
-impl<NID: NodeId> Membership<NID> {
+impl<NID, N> Membership<NID, N>
+where
+    N: Node,
+    NID: NodeId,
+{
     /// Return if a node is a voter or learner, or not in this membership config at all.
     #[allow(dead_code)]
     pub(crate) fn get_node_role(&self, nid: &NID) -> Option<NodeRole> {
@@ -247,13 +258,12 @@ impl<NID: NodeId> Membership<NID> {
     }
 
     /// Get a the node(either voter or learner) by node id.
-    pub(crate) fn get_node(&self, node_id: &NID) -> Option<&Node> {
-        let x = self.nodes.get(node_id)?;
-        x.as_ref()
+    pub(crate) fn get_node(&self, node_id: &NID) -> &N {
+        &self.nodes[node_id]
     }
 
     /// Returns an Iterator of all nodes(voters and learners).
-    pub fn nodes(&self) -> impl Iterator<Item = (&NID, &Option<Node>)> {
+    pub fn nodes(&self) -> impl Iterator<Item = (&NID, &N)> {
         self.nodes.iter()
     }
 
@@ -267,7 +277,11 @@ impl<NID: NodeId> Membership<NID> {
 }
 
 /// Quorum related API
-impl<NID: NodeId> Membership<NID> {
+impl<NID, N> Membership<NID, N>
+where
+    N: Node,
+    NID: NodeId,
+{
     /// Returns the next safe membership to change to while the expected final membership is `goal`.
     ///
     /// E.g.(`cicj` is a joint membership of `ci` and `cj`):
@@ -286,7 +300,7 @@ impl<NID: NodeId> Membership<NID> {
     /// }
     /// ```
     pub(crate) fn next_safe<T>(&self, goal: T, turn_to_learner: bool) -> Result<Self, MissingNodeInfo<NID>>
-    where T: IntoOptionNodes<NID> {
+    where T: IntoOptionNodes<NID, N> {
         let goal = goal.into_option_nodes();
 
         let goal_ids = goal.keys().cloned().collect::<BTreeSet<_>>();

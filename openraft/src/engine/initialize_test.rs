@@ -21,14 +21,19 @@ use crate::Vote;
 
 #[test]
 fn test_initialize_single_node() -> anyhow::Result<()> {
-    let eng = Engine::<u64>::default;
+    let eng = Engine::<u64, ()>::default;
 
     let log_id0 = LogId {
         leader_id: LeaderId::new(0, 0),
         index: 0,
     };
 
-    let m1 = || Membership::<u64>::new(vec![btreeset! {1}], None);
+    let log_id = |term, index| LogId {
+        leader_id: LeaderId::new(term, 1),
+        index,
+    };
+
+    let m1 = || Membership::<u64, ()>::new(vec![btreeset! {1}], None);
     let payload = EntryPayload::<Config>::Membership(m1());
     let mut entries = [EntryRef::new(&payload)];
 
@@ -41,14 +46,17 @@ fn test_initialize_single_node() -> anyhow::Result<()> {
         eng.initialize(&mut entries)?;
 
         assert_eq!(Some(log_id0), eng.state.get_log_id(0));
-        assert_eq!(None, eng.state.get_log_id(1));
-        assert_eq!(Some(log_id0), eng.state.last_log_id());
+        assert_eq!(Some(log_id(1, 1)), eng.state.get_log_id(1));
+        assert_eq!(Some(log_id(1, 1)), eng.state.last_log_id());
 
         assert_eq!(ServerState::Leader, eng.state.server_state);
         assert_eq!(
             MetricsChangeFlags {
-                leader: false,
-                other_metrics: true
+                // Command::UpdateReplicationStreams will set this flag.
+                // Although there is no replication to create.
+                replication: true,
+                local_data: true,
+                cluster: true,
             },
             eng.metrics_flags
         );
@@ -85,6 +93,32 @@ fn test_initialize_single_node() -> anyhow::Result<()> {
                 Command::UpdateServerState {
                     server_state: ServerState::Leader
                 },
+                Command::UpdateReplicationStreams { targets: vec![] },
+                Command::AppendBlankLog {
+                    log_id: LogId {
+                        leader_id: LeaderId { term: 1, node_id: 1 },
+                        index: 1,
+                    },
+                },
+                Command::ReplicateCommitted {
+                    committed: Some(LogId {
+                        leader_id: LeaderId { term: 1, node_id: 1 },
+                        index: 1,
+                    },),
+                },
+                Command::LeaderCommit {
+                    already_committed: None,
+                    upto: LogId {
+                        leader_id: LeaderId { term: 1, node_id: 1 },
+                        index: 1,
+                    },
+                },
+                Command::ReplicateEntries {
+                    upto: Some(LogId {
+                        leader_id: LeaderId { term: 1, node_id: 1 },
+                        index: 1,
+                    },),
+                }
             ],
             eng.commands
         );
@@ -94,7 +128,7 @@ fn test_initialize_single_node() -> anyhow::Result<()> {
 
 #[test]
 fn test_initialize() -> anyhow::Result<()> {
-    let eng = Engine::<u64>::default;
+    let eng = Engine::<u64, ()>::default;
 
     let log_id0 = LogId {
         leader_id: LeaderId::new(0, 0),
@@ -102,7 +136,7 @@ fn test_initialize() -> anyhow::Result<()> {
     };
     let vote0 = Vote::new(0, 0);
 
-    let m12 = || Membership::<u64>::new(vec![btreeset! {1,2}], None);
+    let m12 = || Membership::<u64, ()>::new(vec![btreeset! {1,2}], None);
     let payload = EntryPayload::<Config>::Membership(m12());
     let mut entries = [EntryRef::new(&payload)];
 
@@ -121,8 +155,9 @@ fn test_initialize() -> anyhow::Result<()> {
         assert_eq!(ServerState::Candidate, eng.state.server_state);
         assert_eq!(
             MetricsChangeFlags {
-                leader: false,
-                other_metrics: true
+                replication: false,
+                local_data: true,
+                cluster: true,
             },
             eng.metrics_flags
         );

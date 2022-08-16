@@ -22,12 +22,12 @@ fn log_id(term: u64, index: u64) -> LogId<u64> {
     }
 }
 
-fn m01() -> Membership<u64> {
-    Membership::<u64>::new(vec![btreeset! {0,1}], None)
+fn m01() -> Membership<u64, ()> {
+    Membership::<u64, ()>::new(vec![btreeset! {0,1}], None)
 }
 
-fn eng() -> Engine<u64> {
-    let mut eng = Engine::<u64>::default();
+fn eng() -> Engine<u64, ()> {
+    let mut eng = Engine::<u64, ()>::default();
     eng.state.vote = Vote::new(2, 1);
     eng.state.server_state = ServerState::Candidate;
     eng.state.membership_state.effective = Arc::new(EffectiveMembership::new(Some(log_id(1, 1)), m01()));
@@ -59,8 +59,9 @@ fn test_handle_vote_req_reject_smaller_vote() -> anyhow::Result<()> {
     assert_eq!(ServerState::Candidate, eng.state.server_state);
     assert_eq!(
         MetricsChangeFlags {
-            leader: false,
-            other_metrics: false
+            replication: false,
+            local_data: false,
+            cluster: false,
         },
         eng.metrics_flags
     );
@@ -95,8 +96,9 @@ fn test_handle_vote_req_reject_smaller_last_log_id() -> anyhow::Result<()> {
     assert_eq!(ServerState::Candidate, eng.state.server_state);
     assert_eq!(
         MetricsChangeFlags {
-            leader: false,
-            other_metrics: false
+            replication: false,
+            local_data: false,
+            cluster: false,
         },
         eng.metrics_flags
     );
@@ -132,8 +134,9 @@ fn test_handle_vote_req_granted_equal_vote_and_last_log_id() -> anyhow::Result<(
     assert_eq!(ServerState::Follower, eng.state.server_state);
     assert_eq!(
         MetricsChangeFlags {
-            leader: false,
-            other_metrics: true
+            replication: false,
+            local_data: false,
+            cluster: true,
         },
         eng.metrics_flags
     );
@@ -179,8 +182,9 @@ fn test_handle_vote_req_granted_greater_vote() -> anyhow::Result<()> {
     assert_eq!(ServerState::Follower, eng.state.server_state);
     assert_eq!(
         MetricsChangeFlags {
-            leader: false,
-            other_metrics: true
+            replication: false,
+            local_data: true,
+            cluster: true,
         },
         eng.metrics_flags
     );

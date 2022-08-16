@@ -1,5 +1,6 @@
 //! The Raft network interface.
 
+use std::error::Error;
 use std::fmt::Formatter;
 
 use async_trait::async_trait;
@@ -14,7 +15,6 @@ use crate::raft::InstallSnapshotRequest;
 use crate::raft::InstallSnapshotResponse;
 use crate::raft::VoteRequest;
 use crate::raft::VoteResponse;
-use crate::Node;
 use crate::RaftTypeConfig;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,19 +49,19 @@ where C: RaftTypeConfig
     async fn send_append_entries(
         &mut self,
         rpc: AppendEntriesRequest<C>,
-    ) -> Result<AppendEntriesResponse<C::NodeId>, RPCError<C::NodeId, AppendEntriesError<C::NodeId>>>;
+    ) -> Result<AppendEntriesResponse<C::NodeId>, RPCError<C::NodeId, C::Node, AppendEntriesError<C::NodeId>>>;
 
     /// Send an InstallSnapshot RPC to the target Raft node (§7).
     async fn send_install_snapshot(
         &mut self,
         rpc: InstallSnapshotRequest<C>,
-    ) -> Result<InstallSnapshotResponse<C::NodeId>, RPCError<C::NodeId, InstallSnapshotError<C::NodeId>>>;
+    ) -> Result<InstallSnapshotResponse<C::NodeId>, RPCError<C::NodeId, C::Node, InstallSnapshotError<C::NodeId>>>;
 
     /// Send a RequestVote RPC to the target Raft node (§5).
     async fn send_vote(
         &mut self,
         rpc: VoteRequest<C::NodeId>,
-    ) -> Result<VoteResponse<C::NodeId>, RPCError<C::NodeId, VoteError<C::NodeId>>>;
+    ) -> Result<VoteResponse<C::NodeId>, RPCError<C::NodeId, C::Node, VoteError<C::NodeId>>>;
 }
 
 /// A trait defining the interface for a Raft network factory to create connections between cluster members.
@@ -78,6 +78,10 @@ where C: RaftTypeConfig
     /// Actual type of the network handling a single connection.
     type Network: RaftNetwork<C>;
 
+    /// The error that an implementation returns when `connect()` fails.
+    // TODO: renaming it to `create()` would be better?
+    type ConnectionError: Error + Send + Sync;
+
     /// Create a new network instance sending RPCs to the target node.
     ///
     /// This doesn't have to be a "real" connection, the network instance is just configured to send
@@ -85,5 +89,5 @@ where C: RaftTypeConfig
     ///
     /// The method is intentionally async to give the implementation a chance to use asynchronous
     /// sync primitives to serialize access to the common internal object, if needed.
-    async fn connect(&mut self, target: C::NodeId, node: Option<&Node>) -> Self::Network;
+    async fn connect(&mut self, target: C::NodeId, node: &C::Node) -> Result<Self::Network, Self::ConnectionError>;
 }

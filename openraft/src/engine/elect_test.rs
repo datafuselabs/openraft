@@ -22,16 +22,16 @@ fn log_id(term: u64, index: u64) -> LogId<u64> {
     }
 }
 
-fn m1() -> Membership<u64> {
-    Membership::<u64>::new(vec![btreeset! {1}], None)
+fn m1() -> Membership<u64, ()> {
+    Membership::new(vec![btreeset! {1}], None)
 }
 
-fn m12() -> Membership<u64> {
-    Membership::<u64>::new(vec![btreeset! {1,2}], None)
+fn m12() -> Membership<u64, ()> {
+    Membership::new(vec![btreeset! {1,2}], None)
 }
 
-fn eng() -> Engine<u64> {
-    Engine::<u64>::default()
+fn eng() -> Engine<u64, ()> {
+    Engine::default()
 }
 
 #[test]
@@ -53,8 +53,9 @@ fn test_elect() -> anyhow::Result<()> {
         assert_eq!(ServerState::Leader, eng.state.server_state);
         assert_eq!(
             MetricsChangeFlags {
-                leader: false,
-                other_metrics: true
+                replication: true,
+                local_data: true,
+                cluster: true,
             },
             eng.metrics_flags
         );
@@ -67,7 +68,33 @@ fn test_elect() -> anyhow::Result<()> {
                 },
                 Command::UpdateServerState {
                     server_state: ServerState::Leader
-                }
+                },
+                Command::UpdateReplicationStreams { targets: vec![] },
+                Command::AppendBlankLog {
+                    log_id: LogId {
+                        leader_id: LeaderId { term: 1, node_id: 1 },
+                        index: 0,
+                    },
+                },
+                Command::ReplicateCommitted {
+                    committed: Some(LogId {
+                        leader_id: LeaderId { term: 1, node_id: 1 },
+                        index: 0,
+                    },),
+                },
+                Command::LeaderCommit {
+                    already_committed: None,
+                    upto: LogId {
+                        leader_id: LeaderId { term: 1, node_id: 1 },
+                        index: 0,
+                    },
+                },
+                Command::ReplicateEntries {
+                    upto: Some(LogId {
+                        leader_id: LeaderId { term: 1, node_id: 1 },
+                        index: 0,
+                    },),
+                },
             ],
             eng.commands
         );
@@ -95,8 +122,9 @@ fn test_elect() -> anyhow::Result<()> {
         assert_eq!(ServerState::Leader, eng.state.server_state);
         assert_eq!(
             MetricsChangeFlags {
-                leader: false,
-                other_metrics: true
+                replication: true,
+                local_data: true,
+                cluster: true,
             },
             eng.metrics_flags
         );
@@ -109,7 +137,33 @@ fn test_elect() -> anyhow::Result<()> {
                 },
                 Command::UpdateServerState {
                     server_state: ServerState::Leader
-                }
+                },
+                Command::UpdateReplicationStreams { targets: vec![] },
+                Command::AppendBlankLog {
+                    log_id: LogId {
+                        leader_id: LeaderId { term: 2, node_id: 1 },
+                        index: 0,
+                    },
+                },
+                Command::ReplicateCommitted {
+                    committed: Some(LogId {
+                        leader_id: LeaderId { term: 2, node_id: 1 },
+                        index: 0,
+                    },),
+                },
+                Command::LeaderCommit {
+                    already_committed: None,
+                    upto: LogId {
+                        leader_id: LeaderId { term: 2, node_id: 1 },
+                        index: 0,
+                    },
+                },
+                Command::ReplicateEntries {
+                    upto: Some(LogId {
+                        leader_id: LeaderId { term: 2, node_id: 1 },
+                        index: 0,
+                    },),
+                },
             ],
             eng.commands
         );
@@ -133,8 +187,9 @@ fn test_elect() -> anyhow::Result<()> {
         assert_eq!(ServerState::Candidate, eng.state.server_state);
         assert_eq!(
             MetricsChangeFlags {
-                leader: false,
-                other_metrics: true
+                replication: false,
+                local_data: true,
+                cluster: true,
             },
             eng.metrics_flags
         );

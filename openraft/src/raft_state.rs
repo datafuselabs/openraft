@@ -1,6 +1,7 @@
 use crate::engine::LogIdList;
 use crate::internal_server_state::InternalServerState;
 use crate::leader::Leader;
+use crate::node::Node;
 use crate::raft_types::RaftLogId;
 use crate::LogId;
 use crate::LogIdOptionExt;
@@ -11,39 +12,40 @@ use crate::Vote;
 
 /// A struct used to represent the raft state which a Raft node needs.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct RaftState<NID: NodeId> {
+pub struct RaftState<NID, N>
+where
+    NID: NodeId,
+    N: Node,
+{
     /// The vote state of this node.
     pub vote: Vote<NID>,
 
-    /// The LogId of the last log applied to the state machine.
-    pub last_applied: Option<LogId<NID>>,
+    /// The LogId of the last log committed(AKA applied) to the state machine.
+    ///
+    /// - Committed means: a log that is replicated to a quorum of the cluster and it is of the term of the leader.
+    ///
+    /// - A quorum could be a uniform quorum or joint quorum.
+    pub committed: Option<LogId<NID>>,
 
     /// All log ids this node has.
     pub log_ids: LogIdList<NID>,
 
     /// The latest cluster membership configuration found, in log or in state machine.
-    pub membership_state: MembershipState<NID>,
+    pub membership_state: MembershipState<NID, N>,
 
     // --
     // -- volatile fields: they are not persisted.
     // --
     /// The internal server state used by Engine.
-    pub(crate) internal_server_state: InternalServerState<NID>,
-
-    /// The log id of the last known committed entry.
-    ///
-    /// - Committed means: a log that is replicated to a quorum of the cluster and it is of the term of the leader.
-    ///
-    /// - A quorum could be a uniform quorum or joint quorum.
-    ///
-    /// - `committed` in raft is volatile and will not be persisted.
-    pub committed: Option<LogId<NID>>,
+    pub(crate) internal_server_state: InternalServerState<NID, N>,
 
     pub server_state: ServerState,
 }
 
-impl<NID> RaftState<NID>
-where NID: NodeId
+impl<NID, N> RaftState<NID, N>
+where
+    NID: NodeId,
+    N: Node,
 {
     /// Append a list of `log_id`.
     ///

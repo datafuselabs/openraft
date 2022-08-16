@@ -2,14 +2,13 @@ use std::sync::Arc;
 
 use openraft::error::CheckIsLeaderError;
 use openraft::error::Infallible;
-use openraft::raft::ClientWriteRequest;
-use openraft::EntryPayload;
 use tide::Body;
 use tide::Request;
 use tide::Response;
 use tide::StatusCode;
 
 use crate::app::ExampleApp;
+use crate::ExampleNode;
 use crate::ExampleNodeId;
 use crate::Server;
 
@@ -30,8 +29,7 @@ pub fn rest(app: &mut Server) {
  */
 async fn write(mut req: Request<Arc<ExampleApp>>) -> tide::Result {
     let body = req.body_json().await?;
-    let request = ClientWriteRequest::new(EntryPayload::Normal(body));
-    let res = req.state().raft.client_write(request).await;
+    let res = req.state().raft.client_write(body).await;
     Ok(Response::builder(StatusCode::Ok).body(Body::from_json(&res)?).build())
 }
 
@@ -54,7 +52,7 @@ async fn consistent_read(mut req: Request<Arc<ExampleApp>>) -> tide::Result {
 
             let value = state_machine.get(&key)?;
 
-            let res: Result<String, CheckIsLeaderError<ExampleNodeId>> = Ok(value.unwrap_or_default());
+            let res: Result<String, CheckIsLeaderError<ExampleNodeId, ExampleNode>> = Ok(value.unwrap_or_default());
             Ok(Response::builder(StatusCode::Ok).body(Body::from_json(&res)?).build())
         }
         e => Ok(Response::builder(StatusCode::Ok).body(Body::from_json(&e)?).build()),

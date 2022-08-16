@@ -18,7 +18,7 @@ use crate::MetricsChangeFlags;
 use crate::Vote;
 
 crate::declare_raft_types!(
-    pub(crate) Foo: D=(), R=(), NodeId=u64
+    pub(crate) Foo: D=(), R=(), NodeId=u64, Node=()
 );
 
 fn log_id(term: u64, index: u64) -> LogId<u64> {
@@ -35,37 +35,37 @@ fn blank(term: u64, index: u64) -> Entry<Foo> {
     }
 }
 
-fn m01() -> Membership<u64> {
-    Membership::<u64>::new(vec![btreeset! {0,1}], None)
+fn m01() -> Membership<u64, ()> {
+    Membership::<u64, ()>::new(vec![btreeset! {0,1}], None)
 }
 
-fn m1() -> Membership<u64> {
-    Membership::<u64>::new(vec![btreeset! {1}], None)
+fn m1() -> Membership<u64, ()> {
+    Membership::<u64, ()>::new(vec![btreeset! {1}], None)
 }
 
 /// members: {1}, learners: {2}
-fn m1_2() -> Membership<u64> {
-    Membership::<u64>::new(vec![btreeset! {1}], Some(btreeset! {2}))
+fn m1_2() -> Membership<u64, ()> {
+    Membership::<u64, ()>::new(vec![btreeset! {1}], Some(btreeset! {2}))
 }
 
-fn m13() -> Membership<u64> {
-    Membership::<u64>::new(vec![btreeset! {1,3}], None)
+fn m13() -> Membership<u64, ()> {
+    Membership::<u64, ()>::new(vec![btreeset! {1,3}], None)
 }
 
-fn m23() -> Membership<u64> {
-    Membership::<u64>::new(vec![btreeset! {2,3}], None)
+fn m23() -> Membership<u64, ()> {
+    Membership::<u64, ()>::new(vec![btreeset! {2,3}], None)
 }
 
-fn m34() -> Membership<u64> {
-    Membership::<u64>::new(vec![btreeset! {3,4}], None)
+fn m34() -> Membership<u64, ()> {
+    Membership::<u64, ()>::new(vec![btreeset! {3,4}], None)
 }
 
-fn eng() -> Engine<u64> {
-    let mut eng = Engine::<u64> {
+fn eng() -> Engine<u64, ()> {
+    let mut eng = Engine::<u64, ()> {
         id: 1, // make it a member
         ..Default::default()
     };
-    eng.state.last_applied = Some(log_id(0, 0));
+    eng.state.committed = Some(log_id(0, 0));
     eng.state.vote = Vote::new_committed(3, 1);
     eng.state.log_ids.append(log_id(1, 1));
     eng.state.log_ids.append(log_id(2, 3));
@@ -98,8 +98,9 @@ fn test_leader_append_entries_empty() -> anyhow::Result<()> {
 
     assert_eq!(
         MetricsChangeFlags {
-            leader: false,
-            other_metrics: false
+            replication: false,
+            local_data: false,
+            cluster: false,
         },
         eng.metrics_flags
     );
@@ -140,8 +141,9 @@ fn test_leader_append_entries_normal() -> anyhow::Result<()> {
 
     assert_eq!(
         MetricsChangeFlags {
-            leader: false,
-            other_metrics: true
+            replication: false,
+            local_data: true,
+            cluster: false,
         },
         eng.metrics_flags
     );
@@ -149,7 +151,9 @@ fn test_leader_append_entries_normal() -> anyhow::Result<()> {
     assert_eq!(
         vec![
             Command::AppendInputEntries { range: 0..3 },
-            Command::ReplicateInputEntries { range: 0..3 },
+            Command::ReplicateEntries {
+                upto: Some(log_id(3, 6))
+            },
             Command::MoveInputCursorBy { n: 3 },
         ],
         eng.commands
@@ -192,8 +196,9 @@ fn test_leader_append_entries_fast_commit() -> anyhow::Result<()> {
 
     assert_eq!(
         MetricsChangeFlags {
-            leader: false,
-            other_metrics: true
+            replication: false,
+            local_data: true,
+            cluster: false,
         },
         eng.metrics_flags
     );
@@ -205,10 +210,12 @@ fn test_leader_append_entries_fast_commit() -> anyhow::Result<()> {
                 committed: Some(log_id(3, 6))
             },
             Command::LeaderCommit {
-                since: None,
+                already_committed: Some(log_id(0, 0)),
                 upto: LogId::new(LeaderId::new(3, 1), 6)
             },
-            Command::ReplicateInputEntries { range: 0..3 },
+            Command::ReplicateEntries {
+                upto: Some(log_id(3, 6))
+            },
             Command::MoveInputCursorBy { n: 3 },
         ],
         eng.commands
@@ -261,8 +268,9 @@ fn test_leader_append_entries_fast_commit_upto_membership_entry() -> anyhow::Res
 
     assert_eq!(
         MetricsChangeFlags {
-            leader: true,
-            other_metrics: true
+            replication: true,
+            local_data: true,
+            cluster: true,
         },
         eng.metrics_flags
     );
@@ -274,7 +282,7 @@ fn test_leader_append_entries_fast_commit_upto_membership_entry() -> anyhow::Res
                 committed: Some(log_id(3, 4))
             },
             Command::LeaderCommit {
-                since: None,
+                already_committed: Some(log_id(0, 0)),
                 upto: LogId::new(LeaderId::new(3, 1), 4)
             },
             Command::UpdateMembership {
@@ -284,10 +292,11 @@ fn test_leader_append_entries_fast_commit_upto_membership_entry() -> anyhow::Res
                 )),
             },
             Command::UpdateReplicationStreams {
-                remove: vec![],
-                add: vec![(3, None), (4, None)]
+                targets: vec![(3, None), (4, None)]
             },
-            Command::ReplicateInputEntries { range: 0..3 },
+            Command::ReplicateEntries {
+                upto: Some(log_id(3, 6))
+            },
             Command::MoveInputCursorBy { n: 3 },
         ],
         eng.commands
@@ -340,8 +349,9 @@ fn test_leader_append_entries_fast_commit_membership_no_voter_change() -> anyhow
 
     assert_eq!(
         MetricsChangeFlags {
-            leader: true,
-            other_metrics: true
+            replication: true,
+            local_data: true,
+            cluster: true,
         },
         eng.metrics_flags
     );
@@ -354,7 +364,7 @@ fn test_leader_append_entries_fast_commit_membership_no_voter_change() -> anyhow
                 committed: Some(log_id(3, 4))
             },
             Command::LeaderCommit {
-                since: None,
+                already_committed: Some(log_id(0, 0)),
                 upto: LogId::new(LeaderId::new(3, 1), 4)
             },
             Command::UpdateMembership {
@@ -364,18 +374,19 @@ fn test_leader_append_entries_fast_commit_membership_no_voter_change() -> anyhow
                 )),
             },
             Command::UpdateReplicationStreams {
-                remove: vec![],
-                add: vec![(2, None)]
+                targets: vec![(2, None)]
             },
             // second commit upto the end.
             Command::ReplicateCommitted {
                 committed: Some(log_id(3, 6))
             },
             Command::LeaderCommit {
-                since: Some(LogId::new(LeaderId::new(3, 1), 4)),
+                already_committed: Some(LogId::new(LeaderId::new(3, 1), 4)),
                 upto: LogId::new(LeaderId::new(3, 1), 6)
             },
-            Command::ReplicateInputEntries { range: 0..3 },
+            Command::ReplicateEntries {
+                upto: Some(log_id(3, 6))
+            },
             Command::MoveInputCursorBy { n: 3 },
         ],
         eng.commands
@@ -430,8 +441,9 @@ fn test_leader_append_entries_fast_commit_if_membership_voter_change_to_1() -> a
 
     assert_eq!(
         MetricsChangeFlags {
-            leader: true,
-            other_metrics: true
+            replication: true,
+            local_data: true,
+            cluster: true,
         },
         eng.metrics_flags
     );
@@ -446,18 +458,19 @@ fn test_leader_append_entries_fast_commit_if_membership_voter_change_to_1() -> a
                 )),
             },
             Command::UpdateReplicationStreams {
-                remove: vec![(3, None)],
-                add: vec![(2, None)]
+                targets: vec![(2, None)]
             },
             // It is correct to commit if the membership change ot a one node cluster.
             Command::ReplicateCommitted {
                 committed: Some(log_id(3, 6))
             },
             Command::LeaderCommit {
-                since: None,
+                already_committed: Some(log_id(0, 0)),
                 upto: LogId::new(LeaderId::new(3, 1), 6)
             },
-            Command::ReplicateInputEntries { range: 0..3 },
+            Command::ReplicateEntries {
+                upto: Some(log_id(3, 6))
+            },
             Command::MoveInputCursorBy { n: 3 },
         ],
         eng.commands

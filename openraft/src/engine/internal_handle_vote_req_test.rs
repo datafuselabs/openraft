@@ -21,12 +21,12 @@ fn log_id(term: u64, index: u64) -> LogId<u64> {
     }
 }
 
-fn m01() -> Membership<u64> {
-    Membership::<u64>::new(vec![btreeset! {0,1}], None)
+fn m01() -> Membership<u64, ()> {
+    Membership::<u64, ()>::new(vec![btreeset! {0,1}], None)
 }
 
-fn eng() -> Engine<u64> {
-    let mut eng = Engine::<u64>::default();
+fn eng() -> Engine<u64, ()> {
+    let mut eng = Engine::<u64, ()>::default();
     eng.state.vote = Vote::new(2, 1);
     eng.state.server_state = ServerState::Candidate;
     eng.state.membership_state.effective = Arc::new(EffectiveMembership::new(Some(log_id(1, 1)), m01()));
@@ -48,8 +48,9 @@ fn test_handle_vote_change_reject_smaller_vote() -> anyhow::Result<()> {
     assert_eq!(ServerState::Candidate, eng.state.server_state);
     assert_eq!(
         MetricsChangeFlags {
-            leader: false,
-            other_metrics: false
+            replication: false,
+            local_data: false,
+            cluster: false,
         },
         eng.metrics_flags
     );
@@ -74,8 +75,9 @@ fn test_handle_vote_change_committed_vote() -> anyhow::Result<()> {
     assert_eq!(ServerState::Follower, eng.state.server_state);
     assert_eq!(
         MetricsChangeFlags {
-            leader: false,
-            other_metrics: true
+            replication: false,
+            local_data: true,
+            cluster: true,
         },
         eng.metrics_flags
     );
@@ -87,7 +89,6 @@ fn test_handle_vote_change_committed_vote() -> anyhow::Result<()> {
                 vote: Vote::new_committed(3, 2)
             },
             Command::InstallElectionTimer { can_be_leader: false },
-            Command::RejectElection {},
             Command::UpdateServerState {
                 server_state: ServerState::Follower
             }
@@ -115,8 +116,9 @@ fn test_handle_vote_change_granted_equal_vote() -> anyhow::Result<()> {
     assert_eq!(ServerState::Follower, eng.state.server_state);
     assert_eq!(
         MetricsChangeFlags {
-            leader: false,
-            other_metrics: true
+            replication: false,
+            local_data: false,
+            cluster: true,
         },
         eng.metrics_flags
     );
@@ -151,8 +153,9 @@ fn test_handle_vote_change_granted_greater_vote() -> anyhow::Result<()> {
     assert_eq!(ServerState::Follower, eng.state.server_state);
     assert_eq!(
         MetricsChangeFlags {
-            leader: false,
-            other_metrics: true
+            replication: false,
+            local_data: true,
+            cluster: true,
         },
         eng.metrics_flags
     );

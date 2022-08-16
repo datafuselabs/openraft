@@ -40,6 +40,7 @@ async fn compaction() -> Result<()> {
             snapshot_policy: SnapshotPolicy::LogsSinceLast(snapshot_threshold),
             max_applied_log_to_keep: 2,
             purge_batch_size: 1,
+            enable_tick: false,
             ..Default::default()
         }
         .validate()?,
@@ -136,8 +137,8 @@ async fn compaction() -> Result<()> {
     );
     {
         let res = router
-            .connect(1, None)
-            .await
+            .connect(1, &())
+            .await?
             .send_append_entries(AppendEntriesRequest {
                 vote: Vote::new_committed(1, 0),
                 prev_log_id: Some(LogId::new(LeaderId::new(1, 0), 2)),

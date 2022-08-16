@@ -20,20 +20,20 @@ fn log_id(term: u64, index: u64) -> LogId<u64> {
     }
 }
 
-fn m01() -> Membership<u64> {
-    Membership::<u64>::new(vec![btreeset! {0,1}], None)
+fn m01() -> Membership<u64, ()> {
+    Membership::<u64, ()>::new(vec![btreeset! {0,1}], None)
 }
 
-fn m12() -> Membership<u64> {
-    Membership::<u64>::new(vec![btreeset! {1,2}], None)
+fn m12() -> Membership<u64, ()> {
+    Membership::<u64, ()>::new(vec![btreeset! {1,2}], None)
 }
 
-fn m23() -> Membership<u64> {
-    Membership::<u64>::new(vec![btreeset! {2,3}], None)
+fn m23() -> Membership<u64, ()> {
+    Membership::<u64, ()>::new(vec![btreeset! {2,3}], None)
 }
 
-fn eng() -> Engine<u64> {
-    let mut eng = Engine::<u64> {
+fn eng() -> Engine<u64, ()> {
+    let mut eng = Engine::<u64, ()> {
         id: 2,
         ..Default::default()
     };
@@ -58,8 +58,9 @@ fn test_truncate_logs_since_3() -> anyhow::Result<()> {
     assert_eq!(&[log_id(2, 2)], eng.state.log_ids.key_log_ids());
     assert_eq!(
         MetricsChangeFlags {
-            leader: false,
-            other_metrics: true,
+            replication: false,
+            local_data: true,
+            cluster: true,
         },
         eng.metrics_flags
     );
@@ -99,8 +100,9 @@ fn test_truncate_logs_since_4() -> anyhow::Result<()> {
     assert_eq!(&[log_id(2, 2), log_id(2, 3)], eng.state.log_ids.key_log_ids());
     assert_eq!(
         MetricsChangeFlags {
-            leader: false,
-            other_metrics: true,
+            replication: false,
+            local_data: true,
+            cluster: false,
         },
         eng.metrics_flags
     );
@@ -128,8 +130,9 @@ fn test_truncate_logs_since_5() -> anyhow::Result<()> {
     assert_eq!(&[log_id(2, 2), log_id(4, 4)], eng.state.log_ids.key_log_ids());
     assert_eq!(
         MetricsChangeFlags {
-            leader: false,
-            other_metrics: true,
+            replication: false,
+            local_data: true,
+            cluster: false,
         },
         eng.metrics_flags
     );
@@ -152,8 +155,9 @@ fn test_truncate_logs_since_6() -> anyhow::Result<()> {
     );
     assert_eq!(
         MetricsChangeFlags {
-            leader: false,
-            other_metrics: true,
+            replication: false,
+            local_data: true,
+            cluster: false,
         },
         eng.metrics_flags
     );
@@ -176,8 +180,9 @@ fn test_truncate_logs_since_7() -> anyhow::Result<()> {
     );
     assert_eq!(
         MetricsChangeFlags {
-            leader: false,
-            other_metrics: false,
+            replication: false,
+            local_data: false,
+            cluster: false,
         },
         eng.metrics_flags
     );
@@ -200,8 +205,9 @@ fn test_truncate_logs_since_8() -> anyhow::Result<()> {
     );
     assert_eq!(
         MetricsChangeFlags {
-            leader: false,
-            other_metrics: false,
+            replication: false,
+            local_data: false,
+            cluster: false,
         },
         eng.metrics_flags
     );
@@ -225,8 +231,9 @@ fn test_truncate_logs_revert_effective_membership() -> anyhow::Result<()> {
     assert_eq!(&[log_id(2, 2), log_id(2, 3)], eng.state.log_ids.key_log_ids());
     assert_eq!(
         MetricsChangeFlags {
-            leader: false,
-            other_metrics: true,
+            replication: false,
+            local_data: true,
+            cluster: true,
         },
         eng.metrics_flags
     );

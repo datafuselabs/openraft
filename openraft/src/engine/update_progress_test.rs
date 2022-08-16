@@ -18,16 +18,16 @@ fn log_id(term: u64, index: u64) -> LogId<u64> {
     }
 }
 
-fn m01() -> Membership<u64> {
-    Membership::<u64>::new(vec![btreeset! {0,1}], None)
+fn m01() -> Membership<u64, ()> {
+    Membership::<u64, ()>::new(vec![btreeset! {0,1}], None)
 }
 
-fn m123() -> Membership<u64> {
-    Membership::<u64>::new(vec![btreeset! {1,2,3}], None)
+fn m123() -> Membership<u64, ()> {
+    Membership::<u64, ()>::new(vec![btreeset! {1,2,3}], None)
 }
 
-fn eng() -> Engine<u64> {
-    let mut eng = Engine::<u64> {
+fn eng() -> Engine<u64, ()> {
+    let mut eng = Engine::<u64, ()> {
         id: 2, // make it a member
         ..Default::default()
     };
@@ -76,7 +76,7 @@ fn test_update_progress_update_leader_progress() -> anyhow::Result<()> {
                 committed: Some(log_id(2, 1))
             },
             Command::LeaderCommit {
-                since: None,
+                already_committed: None,
                 upto: log_id(2, 1)
             }
         ],
@@ -93,7 +93,7 @@ fn test_update_progress_update_leader_progress() -> anyhow::Result<()> {
                 committed: Some(log_id(2, 3))
             },
             Command::LeaderCommit {
-                since: Some(log_id(2, 1)),
+                already_committed: Some(log_id(2, 1)),
                 upto: log_id(2, 3)
             }
         ],
@@ -123,7 +123,7 @@ fn test_update_progress_purge_upto_committed() -> anyhow::Result<()> {
                 committed: Some(log_id(2, 1))
             },
             Command::LeaderCommit {
-                since: None,
+                already_committed: None,
                 upto: log_id(2, 1)
             },
             Command::PurgeLog { upto: log_id(2, 1) },
@@ -154,7 +154,7 @@ fn test_update_progress_purge_upto_committed_minus_1() -> anyhow::Result<()> {
                 committed: Some(log_id(2, 2))
             },
             Command::LeaderCommit {
-                since: None,
+                already_committed: None,
                 upto: log_id(2, 2)
             },
             Command::PurgeLog { upto: log_id(2, 1) },

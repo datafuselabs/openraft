@@ -5,13 +5,18 @@ use crate::raft::VoteRequest;
 use crate::EffectiveMembership;
 use crate::LogId;
 use crate::MetricsChangeFlags;
+use crate::Node;
 use crate::NodeId;
 use crate::ServerState;
 use crate::Vote;
 
 /// Commands to send to `RaftRuntime` to execute, to update the application state.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Command<NID: NodeId> {
+pub(crate) enum Command<NID, N>
+where
+    N: Node,
+    NID: NodeId,
+{
     /// Update server state, e.g., Leader, Follower etc.
     /// TODO: consider removing this variant. A runtime does not need to know about this. It is only meant for metrics
     ///       report.
@@ -20,37 +25,45 @@ pub(crate) enum Command<NID: NodeId> {
     /// Append a `range` of entries in the input buffer.
     AppendInputEntries { range: Range<usize> },
 
+    /// Append a blank log.
+    ///
+    /// One of the usage is when a leader is established, a blank log is written to commit the state.
+    AppendBlankLog { log_id: LogId<NID> },
+
     /// Replicate the committed log id to other nodes
     ReplicateCommitted { committed: Option<LogId<NID>> },
 
     /// Commit entries that are already in the store, upto `upto`, inclusive.
     /// And send applied result to the client that proposed the entry.
     LeaderCommit {
-        since: Option<LogId<NID>>,
+        // TODO: pass the log id list?
+        // TODO: merge LeaderCommit and FollowerCommit
+        already_committed: Option<LogId<NID>>,
         upto: LogId<NID>,
     },
 
     /// Commit entries that are already in the store, upto `upto`, inclusive.
     FollowerCommit {
-        since: Option<LogId<NID>>,
+        already_committed: Option<LogId<NID>>,
         upto: LogId<NID>,
     },
 
-    /// Replicate a `range` of entries in the input buffer.
-    ReplicateInputEntries { range: Range<usize> },
+    /// Replicate entries upto log id `upto`, inclusive.
+    ReplicateEntries { upto: Option<LogId<NID>> },
 
     /// Membership config changed, need to update replication streams.
     UpdateMembership {
         // TODO: not used yet.
-        membership: Arc<EffectiveMembership<NID>>,
+        membership: Arc<EffectiveMembership<NID, N>>,
     },
 
     /// Membership config changed, need to update replication streams.
+    /// The Runtime has to close all old replications and start new ones.
+    /// Because a replication stream should only report state for one membership config.
+    /// When membership config changes, the membership log id stored in ReplicationCore has to be updated.
     UpdateReplicationStreams {
-        /// Replication to remove.
-        remove: Vec<(NID, Option<LogId<NID>>)>,
-        /// Replication to add.
-        add: Vec<(NID, Option<LogId<NID>>)>,
+        /// Targets to replicate to.
+        targets: Vec<(NID, Option<LogId<NID>>)>,
     },
 
     /// Move the cursor pointing to an entry in the input buffer.
@@ -71,13 +84,6 @@ pub(crate) enum Command<NID: NodeId> {
         can_be_leader: bool,
     },
 
-    /// Reject election by other candidate for a while.
-    /// The interval is decided by the runtime.
-    ///
-    /// When a leader is established and has not yet timeout,
-    /// A candidate should not take the leadership.
-    RejectElection {},
-
     /// Purge log from the beginning to `upto`, inclusive.
     PurgeLog { upto: LogId<NID> },
 
@@ -92,23 +98,27 @@ pub(crate) enum Command<NID: NodeId> {
     BuildSnapshot {},
 }
 
-impl<NID: NodeId> Command<NID> {
+impl<NID, N> Command<NID, N>
+where
+    N: Node,
+    NID: NodeId,
+{
     /// Update the flag of the metrics that needs to be updated when this command is executed.
     pub(crate) fn update_metrics_flags(&self, flags: &mut MetricsChangeFlags) {
         match &self {
             Command::UpdateServerState { .. } => flags.set_cluster_changed(),
             Command::AppendInputEntries { .. } => flags.set_data_changed(),
+            Command::AppendBlankLog { .. } => flags.set_data_changed(),
             Command::ReplicateCommitted { .. } => {}
             Command::LeaderCommit { .. } => flags.set_data_changed(),
             Command::FollowerCommit { .. } => flags.set_data_changed(),
-            Command::ReplicateInputEntries { .. } => {}
+            Command::ReplicateEntries { .. } => {}
             Command::UpdateMembership { .. } => flags.set_cluster_changed(),
             Command::UpdateReplicationStreams { .. } => flags.set_replication_changed(),
             Command::MoveInputCursorBy { .. } => {}
             Command::SaveVote { .. } => flags.set_data_changed(),
             Command::SendVote { .. } => {}
             Command::InstallElectionTimer { .. } => {}
-            Command::RejectElection { .. } => {}
             Command::PurgeLog { .. } => flags.set_data_changed(),
             Command::DeleteConflictLog { .. } => flags.set_data_changed(),
             Command::BuildSnapshot { .. } => flags.set_data_changed(),

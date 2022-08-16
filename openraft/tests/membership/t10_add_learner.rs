@@ -26,6 +26,7 @@ async fn add_learner_basic() -> Result<()> {
             replication_lag_threshold: 0,
             max_applied_log_to_keep: 2000, // prevent snapshot
             purge_batch_size: 1,
+            enable_tick: false,
             ..Default::default()
         }
         .validate()?,
@@ -89,6 +90,7 @@ async fn add_learner_non_blocking() -> Result<()> {
     let config = Arc::new(
         Config {
             replication_lag_threshold: 0,
+            enable_tick: false,
             ..Default::default()
         }
         .validate()?,
@@ -108,7 +110,7 @@ async fn add_learner_non_blocking() -> Result<()> {
 
         router.new_raft_node(1);
         let raft = router.get_raft_handle(&0)?;
-        let res = raft.add_learner(1, None, false).await?;
+        let res = raft.add_learner(1, (), false).await?;
 
         assert_eq!(None, res.matched);
     }
@@ -125,6 +127,7 @@ async fn check_learner_after_leader_transfered() -> Result<()> {
         Config {
             election_timeout_min: 200,
             election_timeout_max: 250,
+            enable_heartbeat: false,
             ..Default::default()
         }
         .validate()?,

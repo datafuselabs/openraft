@@ -44,7 +44,6 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
         }
 
         self.set_next_election_time(false);
-        self.reject_election_for_a_while();
 
         if req.vote > self.engine.state.vote {
             self.engine.state.vote = req.vote;
@@ -116,7 +115,7 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
         let mut snapshot = self.storage.begin_receiving_snapshot().await?;
         snapshot.as_mut().write_all(&req.data).await.map_err(|e| StorageError::IO {
             source: StorageIOError::new(
-                ErrorSubject::Snapshot(req.meta.clone()),
+                ErrorSubject::Snapshot(req.meta.signature()),
                 ErrorVerb::Write,
                 AnyError::new(&e),
             ),
@@ -157,7 +156,7 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
             if let Err(err) = snapshot.as_mut().seek(SeekFrom::Start(req.offset)).await {
                 self.snapshot_state = Some(SnapshotState::Streaming { offset, id, snapshot });
                 return Err(StorageError::from_io_error(
-                    ErrorSubject::Snapshot(req.meta.clone()),
+                    ErrorSubject::Snapshot(req.meta.signature()),
                     ErrorVerb::Seek,
                     err,
                 )
@@ -169,9 +168,12 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
         // Write the next segment & update offset.
         if let Err(err) = snapshot.as_mut().write_all(&req.data).await {
             self.snapshot_state = Some(SnapshotState::Streaming { offset, id, snapshot });
-            return Err(
-                StorageError::from_io_error(ErrorSubject::Snapshot(req.meta.clone()), ErrorVerb::Write, err).into(),
-            );
+            return Err(StorageError::from_io_error(
+                ErrorSubject::Snapshot(req.meta.signature()),
+                ErrorVerb::Write,
+                err,
+            )
+            .into());
         }
         offset += req.data.len() as u64;
 
@@ -199,7 +201,7 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
 
         snapshot.as_mut().shutdown().await.map_err(|e| StorageError::IO {
             source: StorageIOError::new(
-                ErrorSubject::Snapshot(req.meta.clone()),
+                ErrorSubject::Snapshot(req.meta.signature()),
                 ErrorVerb::Write,
                 AnyError::new(&e),
             ),
@@ -251,9 +253,6 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
 
         if st.committed < Some(last_applied) {
             st.committed = Some(last_applied);
-        }
-        if st.last_applied < Some(last_applied) {
-            st.last_applied = Some(last_applied);
         }
 
         debug_assert!(st.last_purged_log_id() <= Some(last_applied));

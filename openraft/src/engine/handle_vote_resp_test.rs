@@ -22,16 +22,16 @@ fn log_id(term: u64, index: u64) -> LogId<u64> {
     }
 }
 
-fn m12() -> Membership<u64> {
-    Membership::<u64>::new(vec![btreeset! {1,2}], None)
+fn m12() -> Membership<u64, ()> {
+    Membership::<u64, ()>::new(vec![btreeset! {1,2}], None)
 }
 
-fn m1234() -> Membership<u64> {
-    Membership::<u64>::new(vec![btreeset! {1,2,3,4}], None)
+fn m1234() -> Membership<u64, ()> {
+    Membership::<u64, ()>::new(vec![btreeset! {1,2,3,4}], None)
 }
 
-fn eng() -> Engine<u64> {
-    Engine::<u64>::default()
+fn eng() -> Engine<u64, ()> {
+    Engine::<u64, ()>::default()
 }
 
 #[test]
@@ -54,8 +54,9 @@ fn test_handle_vote_resp() -> anyhow::Result<()> {
         assert_eq!(ServerState::Follower, eng.state.server_state);
         assert_eq!(
             MetricsChangeFlags {
-                leader: false,
-                other_metrics: false
+                replication: false,
+                local_data: false,
+                cluster: false,
             },
             eng.metrics_flags
         );
@@ -63,7 +64,7 @@ fn test_handle_vote_resp() -> anyhow::Result<()> {
         assert_eq!(0, eng.commands.len());
     }
 
-    tracing::info!("--- recv a smaller vote. vote_granted==false always revert this node to follower");
+    tracing::info!("--- recv a smaller vote. vote_granted==false always; keep trying in candidate state");
     {
         let mut eng = eng();
         eng.id = 1;
@@ -80,29 +81,25 @@ fn test_handle_vote_resp() -> anyhow::Result<()> {
         });
 
         assert_eq!(Vote::new(2, 1), eng.state.vote);
-        assert!(eng.state.internal_server_state.is_following());
+        assert!(eng.state.internal_server_state.is_leading());
 
-        assert_eq!(ServerState::Follower, eng.state.server_state);
+        assert_eq!(ServerState::Candidate, eng.state.server_state);
         assert_eq!(
             MetricsChangeFlags {
-                leader: false,
-                other_metrics: true
+                replication: false,
+                local_data: false,
+                cluster: false,
             },
             eng.metrics_flags
         );
 
         assert_eq!(
-            vec![
-                Command::InstallElectionTimer { can_be_leader: false },
-                Command::UpdateServerState {
-                    server_state: ServerState::Follower
-                },
-            ],
+            vec![Command::InstallElectionTimer { can_be_leader: false },],
             eng.commands
         );
     }
 
-    tracing::info!("--- seen a higher vote. revert to follower");
+    tracing::info!("--- seen a higher vote. keep trying in candidate state");
     {
         let mut eng = eng();
         eng.id = 1;
@@ -120,13 +117,14 @@ fn test_handle_vote_resp() -> anyhow::Result<()> {
         });
 
         assert_eq!(Vote::new(2, 2), eng.state.vote);
-        assert!(eng.state.internal_server_state.is_following());
+        assert!(eng.state.internal_server_state.is_leading());
 
-        assert_eq!(ServerState::Follower, eng.state.server_state);
+        assert_eq!(ServerState::Candidate, eng.state.server_state);
         assert_eq!(
             MetricsChangeFlags {
-                leader: false,
-                other_metrics: true
+                replication: false,
+                local_data: true,
+                cluster: false,
             },
             eng.metrics_flags
         );
@@ -135,15 +133,12 @@ fn test_handle_vote_resp() -> anyhow::Result<()> {
             vec![
                 Command::SaveVote { vote: Vote::new(2, 2) },
                 Command::InstallElectionTimer { can_be_leader: true },
-                Command::UpdateServerState {
-                    server_state: ServerState::Follower
-                },
             ],
             eng.commands
         );
     }
 
-    tracing::info!("--- equal vote, rejected by higher last_log_id. revert to follower");
+    tracing::info!("--- equal vote, rejected by higher last_log_id. keep trying in candidate state");
     {
         let mut eng = eng();
         eng.id = 1;
@@ -160,24 +155,20 @@ fn test_handle_vote_resp() -> anyhow::Result<()> {
         });
 
         assert_eq!(Vote::new(2, 1), eng.state.vote);
-        assert!(eng.state.internal_server_state.is_following());
+        assert!(eng.state.internal_server_state.is_leading());
 
-        assert_eq!(ServerState::Follower, eng.state.server_state);
+        assert_eq!(ServerState::Candidate, eng.state.server_state);
         assert_eq!(
             MetricsChangeFlags {
-                leader: false,
-                other_metrics: true
+                replication: false,
+                local_data: false,
+                cluster: false,
             },
             eng.metrics_flags
         );
 
         assert_eq!(
-            vec![
-                Command::InstallElectionTimer { can_be_leader: false },
-                Command::UpdateServerState {
-                    server_state: ServerState::Follower
-                },
-            ],
+            vec![Command::InstallElectionTimer { can_be_leader: false },],
             eng.commands
         );
     }
@@ -207,8 +198,9 @@ fn test_handle_vote_resp() -> anyhow::Result<()> {
         assert_eq!(ServerState::Candidate, eng.state.server_state);
         assert_eq!(
             MetricsChangeFlags {
-                leader: false,
-                other_metrics: false
+                replication: false,
+                local_data: false,
+                cluster: false,
             },
             eng.metrics_flags
         );
@@ -241,8 +233,9 @@ fn test_handle_vote_resp() -> anyhow::Result<()> {
         assert_eq!(ServerState::Leader, eng.state.server_state);
         assert_eq!(
             MetricsChangeFlags {
-                leader: false,
-                other_metrics: true
+                replication: true,
+                local_data: true,
+                cluster: true,
             },
             eng.metrics_flags
         );
@@ -254,7 +247,22 @@ fn test_handle_vote_resp() -> anyhow::Result<()> {
                 },
                 Command::UpdateServerState {
                     server_state: ServerState::Leader
-                }
+                },
+                Command::UpdateReplicationStreams {
+                    targets: vec![(2, None)]
+                },
+                Command::AppendBlankLog {
+                    log_id: LogId {
+                        leader_id: LeaderId { term: 2, node_id: 1 },
+                        index: 0,
+                    },
+                },
+                Command::ReplicateEntries {
+                    upto: Some(LogId {
+                        leader_id: LeaderId { term: 2, node_id: 1 },
+                        index: 0,
+                    },),
+                },
             ],
             eng.commands
         );

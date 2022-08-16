@@ -13,7 +13,7 @@ use crate::MembershipState;
 use crate::MetricsChangeFlags;
 
 crate::declare_raft_types!(
-    pub(crate) Foo: D=(), R=(), NodeId=u64
+    pub(crate) Foo: D=(), R=(), NodeId=u64, Node=()
 );
 
 fn log_id(term: u64, index: u64) -> LogId<u64> {
@@ -23,20 +23,20 @@ fn log_id(term: u64, index: u64) -> LogId<u64> {
     }
 }
 
-fn m01() -> Membership<u64> {
-    Membership::<u64>::new(vec![btreeset! {0,1}], None)
+fn m01() -> Membership<u64, ()> {
+    Membership::<u64, ()>::new(vec![btreeset! {0,1}], None)
 }
 
-fn m23() -> Membership<u64> {
-    Membership::<u64>::new(vec![btreeset! {2,3}], None)
+fn m23() -> Membership<u64, ()> {
+    Membership::<u64, ()>::new(vec![btreeset! {2,3}], None)
 }
 
-fn m34() -> Membership<u64> {
-    Membership::<u64>::new(vec![btreeset! {3,4}], None)
+fn m34() -> Membership<u64, ()> {
+    Membership::<u64, ()>::new(vec![btreeset! {3,4}], None)
 }
 
-fn eng() -> Engine<u64> {
-    let mut eng = Engine::<u64> {
+fn eng() -> Engine<u64, ()> {
+    let mut eng = Engine::<u64, ()> {
         id: 2, // make it a member
         ..Default::default()
     };
@@ -63,8 +63,9 @@ fn test_update_committed_membership_at_index_0() -> anyhow::Result<()> {
 
     assert_eq!(
         MetricsChangeFlags {
-            leader: false,
-            other_metrics: false
+            replication: false,
+            local_data: false,
+            cluster: false,
         },
         eng.metrics_flags
     );
@@ -91,8 +92,9 @@ fn test_update_committed_membership_at_index_2() -> anyhow::Result<()> {
 
     assert_eq!(
         MetricsChangeFlags {
-            leader: false,
-            other_metrics: false
+            replication: false,
+            local_data: false,
+            cluster: false,
         },
         eng.metrics_flags
     );
@@ -120,8 +122,9 @@ fn test_update_committed_membership_at_index_3() -> anyhow::Result<()> {
 
     assert_eq!(
         MetricsChangeFlags {
-            leader: false,
-            other_metrics: true
+            replication: false,
+            local_data: false,
+            cluster: true,
         },
         eng.metrics_flags
     );
@@ -159,8 +162,9 @@ fn test_update_committed_membership_at_index_4() -> anyhow::Result<()> {
 
     assert_eq!(
         MetricsChangeFlags {
-            leader: false,
-            other_metrics: true
+            replication: false,
+            local_data: false,
+            cluster: true,
         },
         eng.metrics_flags
     );

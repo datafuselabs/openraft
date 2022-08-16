@@ -15,7 +15,7 @@ use crate::MembershipState;
 use crate::MetricsChangeFlags;
 
 crate::declare_raft_types!(
-    pub(crate) Foo: D=(), R=(), NodeId=u64
+    pub(crate) Foo: D=(), R=(), NodeId=u64, Node = ()
 );
 
 fn log_id(term: u64, index: u64) -> LogId<u64> {
@@ -32,16 +32,16 @@ fn blank(term: u64, index: u64) -> Entry<Foo> {
     }
 }
 
-fn m01() -> Membership<u64> {
-    Membership::<u64>::new(vec![btreeset! {0,1}], None)
+fn m01() -> Membership<u64, ()> {
+    Membership::new(vec![btreeset! {0,1}], None)
 }
 
-fn m23() -> Membership<u64> {
-    Membership::<u64>::new(vec![btreeset! {2,3}], None)
+fn m23() -> Membership<u64, ()> {
+    Membership::new(vec![btreeset! {2,3}], None)
 }
 
-fn eng() -> Engine<u64> {
-    let mut eng = Engine::<u64>::default();
+fn eng() -> Engine<u64, ()> {
+    let mut eng = Engine::default();
     eng.state.committed = Some(log_id(1, 1));
     eng.state.membership_state.committed = Arc::new(EffectiveMembership::new(Some(log_id(1, 1)), m01()));
     eng.state.membership_state.effective = Arc::new(EffectiveMembership::new(Some(log_id(2, 3)), m23()));
@@ -65,8 +65,9 @@ fn test_follower_commit_entries_empty() -> anyhow::Result<()> {
 
     assert_eq!(
         MetricsChangeFlags {
-            leader: false,
-            other_metrics: false
+            replication: false,
+            local_data: false,
+            cluster: false,
         },
         eng.metrics_flags
     );
@@ -93,8 +94,9 @@ fn test_follower_commit_entries_no_update() -> anyhow::Result<()> {
 
     assert_eq!(
         MetricsChangeFlags {
-            leader: false,
-            other_metrics: false
+            replication: false,
+            local_data: false,
+            cluster: false,
         },
         eng.metrics_flags
     );
@@ -121,15 +123,16 @@ fn test_follower_commit_entries_lt_last_entry() -> anyhow::Result<()> {
 
     assert_eq!(
         MetricsChangeFlags {
-            leader: false,
-            other_metrics: true
+            replication: false,
+            local_data: true,
+            cluster: false,
         },
         eng.metrics_flags
     );
 
     assert_eq!(
         vec![Command::FollowerCommit {
-            since: Some(log_id(1, 1)),
+            already_committed: Some(log_id(1, 1)),
             upto: log_id(2, 3)
         }],
         eng.commands
@@ -155,15 +158,16 @@ fn test_follower_commit_entries_gt_last_entry() -> anyhow::Result<()> {
 
     assert_eq!(
         MetricsChangeFlags {
-            leader: false,
-            other_metrics: true
+            replication: false,
+            local_data: true,
+            cluster: false,
         },
         eng.metrics_flags
     );
 
     assert_eq!(
         vec![Command::FollowerCommit {
-            since: Some(log_id(1, 1)),
+            already_committed: Some(log_id(1, 1)),
             upto: log_id(2, 3)
         }],
         eng.commands
@@ -187,7 +191,7 @@ fn test_follower_commit_entries_purge_to_committed() -> anyhow::Result<()> {
     assert_eq!(
         vec![
             Command::FollowerCommit {
-                since: Some(log_id(1, 1)),
+                already_committed: Some(log_id(1, 1)),
                 upto: log_id(2, 3)
             },
             Command::PurgeLog { upto: log_id(2, 3) },
@@ -213,7 +217,7 @@ fn test_follower_commit_entries_purge_to_committed_minus_1() -> anyhow::Result<(
     assert_eq!(
         vec![
             Command::FollowerCommit {
-                since: Some(log_id(1, 1)),
+                already_committed: Some(log_id(1, 1)),
                 upto: log_id(2, 3)
             },
             Command::PurgeLog { upto: log_id(1, 2) },

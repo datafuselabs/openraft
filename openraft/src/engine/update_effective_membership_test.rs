@@ -15,7 +15,7 @@ use crate::MetricsChangeFlags;
 use crate::Vote;
 
 crate::declare_raft_types!(
-    pub(crate) Foo: D=(), R=(), NodeId=u64
+    pub(crate) Foo: D=(), R=(), NodeId=u64, Node=()
 );
 
 fn log_id(term: u64, index: u64) -> LogId<u64> {
@@ -25,28 +25,28 @@ fn log_id(term: u64, index: u64) -> LogId<u64> {
     }
 }
 
-fn m01() -> Membership<u64> {
-    Membership::<u64>::new(vec![btreeset! {0,1}], None)
+fn m01() -> Membership<u64, ()> {
+    Membership::<u64, ()>::new(vec![btreeset! {0,1}], None)
 }
 
-fn m23() -> Membership<u64> {
-    Membership::<u64>::new(vec![btreeset! {2,3}], None)
+fn m23() -> Membership<u64, ()> {
+    Membership::<u64, ()>::new(vec![btreeset! {2,3}], None)
 }
 
-fn m23_45() -> Membership<u64> {
-    Membership::<u64>::new(vec![btreeset! {2,3}], Some(btreeset! {4,5}))
+fn m23_45() -> Membership<u64, ()> {
+    Membership::<u64, ()>::new(vec![btreeset! {2,3}], Some(btreeset! {4,5}))
 }
 
-fn m34() -> Membership<u64> {
-    Membership::<u64>::new(vec![btreeset! {3,4}], None)
+fn m34() -> Membership<u64, ()> {
+    Membership::<u64, ()>::new(vec![btreeset! {3,4}], None)
 }
 
-fn m4_356() -> Membership<u64> {
-    Membership::<u64>::new(vec![btreeset! {4}], Some(btreeset! {3,5,6}))
+fn m4_356() -> Membership<u64, ()> {
+    Membership::<u64, ()>::new(vec![btreeset! {4}], Some(btreeset! {3,5,6}))
 }
 
-fn eng() -> Engine<u64> {
-    let mut eng = Engine::<u64> {
+fn eng() -> Engine<u64, ()> {
+    let mut eng = Engine::<u64, ()> {
         id: 2, // make it a member
         ..Default::default()
     };
@@ -73,8 +73,9 @@ fn test_update_effective_membership_at_index_0_is_allowed() -> anyhow::Result<()
 
     assert_eq!(
         MetricsChangeFlags {
-            leader: false,
-            other_metrics: true
+            replication: false,
+            local_data: false,
+            cluster: true,
         },
         eng.metrics_flags
     );
@@ -119,8 +120,9 @@ fn test_update_effective_membership_for_leader() -> anyhow::Result<()> {
 
     assert_eq!(
         MetricsChangeFlags {
-            leader: true,
-            other_metrics: true
+            replication: true,
+            local_data: false,
+            cluster: true,
         },
         eng.metrics_flags
     );
@@ -132,8 +134,7 @@ fn test_update_effective_membership_for_leader() -> anyhow::Result<()> {
                 membership: Arc::new(EffectiveMembership::new(Some(log_id(3, 4)), m34())),
             },
             Command::UpdateReplicationStreams {
-                add: vec![(4, None)],
-                remove: vec![], // node-2 is leader, won't be removed
+                targets: vec![(3, None), (4, None)], // node-2 is leader, won't be removed
             }
         ],
         eng.commands

@@ -10,8 +10,8 @@ fn log_id(term: u64, index: u64) -> LogId<u64> {
     }
 }
 
-fn eng() -> Engine<u64> {
-    let mut eng = Engine::<u64>::default();
+fn eng() -> Engine<u64, ()> {
+    let mut eng = Engine::default();
     eng.state.log_ids = LogIdList::new(vec![
         //
         log_id(0, 0),
@@ -24,7 +24,7 @@ fn eng() -> Engine<u64> {
 
 #[test]
 fn test_calc_purge_upto() -> anyhow::Result<()> {
-    // last_purged_log_id, last_applied, max_keep, want
+    // last_purged_log_id, committed, max_keep, want
     let cases = vec![
         //
         (None, None, 0, None),

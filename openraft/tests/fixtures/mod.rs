@@ -40,7 +40,6 @@ use openraft::metrics::Wait;
 use openraft::raft::AddLearnerResponse;
 use openraft::raft::AppendEntriesRequest;
 use openraft::raft::AppendEntriesResponse;
-use openraft::raft::ClientWriteRequest;
 use openraft::raft::InstallSnapshotRequest;
 use openraft::raft::InstallSnapshotResponse;
 use openraft::raft::VoteRequest;
@@ -54,7 +53,6 @@ use openraft::EntryPayload;
 use openraft::LeaderId;
 use openraft::LogId;
 use openraft::LogIdOptionExt;
-use openraft::Node;
 use openraft::Raft;
 use openraft::RaftMetrics;
 use openraft::RaftNetwork;
@@ -143,8 +141,12 @@ where
     /// The table of all nodes currently known to this router instance.
     #[allow(clippy::type_complexity)]
     routing_table: Arc<Mutex<BTreeMap<C::NodeId, (MemRaft<C, S>, StoreWithDefensive<C, S>)>>>,
+
     /// Nodes which are isolated can neither send nor receive frames.
     isolated_nodes: Arc<Mutex<HashSet<C::NodeId>>>,
+
+    /// Nodes which could not be connected via RaftNetworkFactory::connect
+    unconnectable: Arc<Mutex<HashSet<C::NodeId>>>,
 
     /// To emulate network delay for sending, in milliseconds.
     /// 0 means no delay.
@@ -172,11 +174,22 @@ where
     }
 
     pub fn build(self) -> TypedRaftRouter<C, S> {
+        let send_delay = {
+            let send_delay = env::var("OPENRAFT_NETWORK_SEND_DELAY").ok();
+
+            if let Some(d) = send_delay {
+                tracing::info!("OPENRAFT_NETWORK_SEND_DELAY set send-delay to {} ms", d);
+                d.parse::<u64>().unwrap()
+            } else {
+                self.send_delay
+            }
+        };
         TypedRaftRouter {
             config: self.config,
             routing_table: Default::default(),
             isolated_nodes: Default::default(),
-            send_delay: Arc::new(AtomicU64::new(self.send_delay)),
+            send_delay: Arc::new(AtomicU64::new(send_delay)),
+            unconnectable: Default::default(),
         }
     }
 }
@@ -192,6 +205,7 @@ where
             config: self.config.clone(),
             routing_table: self.routing_table.clone(),
             isolated_nodes: self.isolated_nodes.clone(),
+            unconnectable: self.unconnectable.clone(),
             send_delay: self.send_delay.clone(),
         }
     }
@@ -318,19 +332,19 @@ where
     }
 
     pub fn new_store(&mut self) -> StoreWithDefensive<C, S> {
-        let defensive = env::var("RAFT_STORE_DEFENSIVE").ok();
+        let defensive = env::var("OPENRAFT_STORE_DEFENSIVE").ok();
 
         let sto = StoreExt::<C, S>::new(S::default());
 
         if let Some(d) = defensive {
-            tracing::info!("RAFT_STORE_DEFENSIVE set store defensive to {}", d);
+            tracing::info!("OPENRAFT_STORE_DEFENSIVE set store defensive to {}", d);
 
             let want = if d == "on" {
                 true
             } else if d == "off" {
                 false
             } else {
-                tracing::warn!("unknown value of RAFT_STORE_DEFENSIVE: {}", d);
+                tracing::warn!("unknown value of OPENRAFT_STORE_DEFENSIVE: {}", d);
                 return sto;
             };
 
@@ -362,6 +376,11 @@ where
             isolated.remove(&id);
         }
 
+        {
+            let mut unreachable = self.unconnectable.lock().unwrap();
+            unreachable.remove(&id);
+        }
+
         opt_handles
     }
 
@@ -385,7 +404,7 @@ where
     }
 
     /// Get a payload of the latest metrics from each node in the cluster.
-    pub fn latest_metrics(&self) -> Vec<RaftMetrics<C::NodeId>> {
+    pub fn latest_metrics(&self) -> Vec<RaftMetrics<C::NodeId, C::Node>> {
         let rt = self.routing_table.lock().unwrap();
         let mut metrics = vec![];
         for node in rt.values() {
@@ -394,7 +413,7 @@ where
         metrics
     }
 
-    pub fn get_metrics(&self, node_id: &C::NodeId) -> Result<RaftMetrics<C::NodeId>> {
+    pub fn get_metrics(&self, node_id: &C::NodeId) -> Result<RaftMetrics<C::NodeId, C::Node>> {
         let node = self.get_raft_handle(node_id)?;
         let metrics = node.metrics().borrow().clone();
         Ok(metrics)
@@ -426,16 +445,16 @@ where
         func: T,
         timeout: Option<Duration>,
         msg: &str,
-    ) -> Result<RaftMetrics<C::NodeId>>
+    ) -> Result<RaftMetrics<C::NodeId, C::Node>>
     where
-        T: Fn(&RaftMetrics<C::NodeId>) -> bool + Send,
+        T: Fn(&RaftMetrics<C::NodeId, C::Node>) -> bool + Send,
     {
         let wait = self.wait(node_id, timeout);
         let rst = wait.metrics(func, format!("node-{} {}", node_id, msg)).await?;
         Ok(rst)
     }
 
-    pub fn wait(&self, node_id: &C::NodeId, timeout: Option<Duration>) -> Wait<C::NodeId> {
+    pub fn wait(&self, node_id: &C::NodeId, timeout: Option<Duration>) -> Wait<C::NodeId, C::Node> {
         let node = {
             let rt = self.routing_table.lock().unwrap();
             rt.get(node_id).expect("target node not found in routing table").clone().0
@@ -535,18 +554,29 @@ where
         nodes.remove(&id);
     }
 
+    /// Unblock the network of the specified node.
+    #[tracing::instrument(level = "debug", skip(self))]
+    pub fn set_connectable(&self, id: C::NodeId, enable: bool) {
+        let mut nodes = self.unconnectable.lock().unwrap();
+        if !enable {
+            nodes.insert(id);
+        } else {
+            nodes.remove(&id);
+        }
+    }
+
     /// Bring up a new learner and add it to the leader's membership.
     pub async fn add_learner(
         &self,
         leader: C::NodeId,
         target: C::NodeId,
-    ) -> Result<AddLearnerResponse<C::NodeId>, AddLearnerError<C::NodeId>> {
+    ) -> Result<AddLearnerResponse<C::NodeId>, AddLearnerError<C::NodeId, C::Node>> {
         let node = self.get_raft_handle(&leader).unwrap();
-        node.add_learner(target, None, true).await
+        node.add_learner(target, C::Node::default(), true).await
     }
 
     /// Send a is_leader request to the target node.
-    pub async fn is_leader(&self, target: C::NodeId) -> Result<(), CheckIsLeaderError<C::NodeId>> {
+    pub async fn is_leader(&self, target: C::NodeId) -> Result<(), CheckIsLeaderError<C::NodeId, C::Node>> {
         let node = {
             let rt = self.routing_table.lock().unwrap();
             rt.get(&target).unwrap_or_else(|| panic!("node with ID {} does not exist", target)).clone()
@@ -560,7 +590,7 @@ where
         mut target: C::NodeId,
         client_id: &str,
         serial: u64,
-    ) -> Result<(), ClientWriteError<C::NodeId>> {
+    ) -> Result<(), ClientWriteError<C::NodeId, C::Node>> {
         for ith in 0..3 {
             let req = <C::D as IntoMemClientRequest<C::D>>::make_request(client_id, serial);
             if let Err(err) = self.send_client_request(target, req).await {
@@ -595,7 +625,7 @@ where
 
     /// Send external request to the particular node.
     pub fn external_request<
-        F: FnOnce(&RaftState<C::NodeId>, &mut StoreExt<C, S>, &mut TypedRaftRouter<C, S>) + Send + 'static,
+        F: FnOnce(&RaftState<C::NodeId, C::Node>, &mut StoreExt<C, S>, &mut TypedRaftRouter<C, S>) + Send + 'static,
     >(
         &self,
         target: C::NodeId,
@@ -621,7 +651,7 @@ where
         target: C::NodeId,
         client_id: &str,
         count: usize,
-    ) -> Result<u64, ClientWriteError<C::NodeId>> {
+    ) -> Result<u64, ClientWriteError<C::NodeId, C::Node>> {
         for idx in 0..count {
             self.client_request(target, client_id, idx as u64).await?;
         }
@@ -633,7 +663,7 @@ where
         &self,
         target: C::NodeId,
         req: C::D,
-    ) -> std::result::Result<C::R, ClientWriteError<C::NodeId>> {
+    ) -> std::result::Result<C::R, ClientWriteError<C::NodeId, C::Node>> {
         let node = {
             let rt = self.routing_table.lock().unwrap();
             rt.get(&target)
@@ -641,9 +671,7 @@ where
                 .clone()
         };
 
-        let payload = EntryPayload::<C>::Normal(req);
-
-        node.0.client_write(ClientWriteRequest::<C>::new(payload)).await.map(|res| res.data)
+        node.0.client_write(req).await.map(|res| res.data)
     }
 
     /// Assert that the cluster is in a pristine state, with all nodes as learners.
@@ -913,12 +941,20 @@ where
     S: Default + Clone,
 {
     type Network = RaftRouterNetwork<C, S>;
+    type ConnectionError = NetworkError;
 
-    async fn connect(&mut self, target: C::NodeId, _node: Option<&Node>) -> Self::Network {
-        RaftRouterNetwork {
+    async fn connect(&mut self, target: C::NodeId, _node: &C::Node) -> Result<Self::Network, NetworkError> {
+        {
+            let unreachable = self.unconnectable.lock().unwrap();
+            if unreachable.contains(&target) {
+                let e = NetworkError::new(&AnyError::error(format!("failed to connect: {}", target)));
+                return Err(e);
+            }
+        }
+        Ok(RaftRouterNetwork {
             target,
             owner: self.clone(),
-        }
+        })
     }
 }
 
@@ -943,7 +979,10 @@ where
     async fn send_append_entries(
         &mut self,
         rpc: AppendEntriesRequest<C>,
-    ) -> std::result::Result<AppendEntriesResponse<C::NodeId>, RPCError<C::NodeId, AppendEntriesError<C::NodeId>>> {
+    ) -> std::result::Result<
+        AppendEntriesResponse<C::NodeId>,
+        RPCError<C::NodeId, C::Node, AppendEntriesError<C::NodeId>>,
+    > {
         tracing::debug!("append_entries to id={} {:?}", self.target, rpc);
         self.owner.rand_send_delay().await;
 
@@ -962,8 +1001,10 @@ where
     async fn send_install_snapshot(
         &mut self,
         rpc: InstallSnapshotRequest<C>,
-    ) -> std::result::Result<InstallSnapshotResponse<C::NodeId>, RPCError<C::NodeId, InstallSnapshotError<C::NodeId>>>
-    {
+    ) -> std::result::Result<
+        InstallSnapshotResponse<C::NodeId>,
+        RPCError<C::NodeId, C::Node, InstallSnapshotError<C::NodeId>>,
+    > {
         self.owner.rand_send_delay().await;
 
         self.owner.check_reachable(rpc.vote.node_id, self.target)?;
@@ -979,7 +1020,7 @@ where
     async fn send_vote(
         &mut self,
         rpc: VoteRequest<C::NodeId>,
-    ) -> std::result::Result<VoteResponse<C::NodeId>, RPCError<C::NodeId, VoteError<C::NodeId>>> {
+    ) -> std::result::Result<VoteResponse<C::NodeId>, RPCError<C::NodeId, C::Node, VoteError<C::NodeId>>> {
         self.owner.rand_send_delay().await;
 
         self.owner.check_reachable(rpc.vote.node_id, self.target)?;

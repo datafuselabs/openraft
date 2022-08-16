@@ -15,7 +15,7 @@ use crate::MembershipState;
 use crate::MetricsChangeFlags;
 
 crate::declare_raft_types!(
-    pub(crate) Foo: D=(), R=(), NodeId=u64
+    pub(crate) Foo: D=(), R=(), NodeId=u64, Node = ()
 );
 
 fn log_id(term: u64, index: u64) -> LogId<u64> {
@@ -32,24 +32,24 @@ fn blank(term: u64, index: u64) -> Entry<Foo> {
     }
 }
 
-fn m01() -> Membership<u64> {
-    Membership::<u64>::new(vec![btreeset! {0,1}], None)
+fn m01() -> Membership<u64, ()> {
+    Membership::new(vec![btreeset! {0,1}], None)
 }
 
-fn m23() -> Membership<u64> {
-    Membership::<u64>::new(vec![btreeset! {2,3}], None)
+fn m23() -> Membership<u64, ()> {
+    Membership::new(vec![btreeset! {2,3}], None)
 }
 
-fn m34() -> Membership<u64> {
-    Membership::<u64>::new(vec![btreeset! {3,4}], None)
+fn m34() -> Membership<u64, ()> {
+    Membership::new(vec![btreeset! {3,4}], None)
 }
 
-fn m45() -> Membership<u64> {
-    Membership::<u64>::new(vec![btreeset! {4,5}], None)
+fn m45() -> Membership<u64, ()> {
+    Membership::new(vec![btreeset! {4,5}], None)
 }
 
-fn eng() -> Engine<u64> {
-    let mut eng = Engine::<u64> {
+fn eng() -> Engine<u64, ()> {
+    let mut eng = Engine {
         id: 2, // make it a member
         ..Default::default()
     };
@@ -88,8 +88,9 @@ fn test_follower_do_append_entries_empty() -> anyhow::Result<()> {
 
     assert_eq!(
         MetricsChangeFlags {
-            leader: false,
-            other_metrics: false
+            replication: false,
+            local_data: false,
+            cluster: false,
         },
         eng.metrics_flags
     );
@@ -131,8 +132,9 @@ fn test_follower_do_append_entries_no_membership_entries() -> anyhow::Result<()>
 
     assert_eq!(
         MetricsChangeFlags {
-            leader: false,
-            other_metrics: true
+            replication: false,
+            local_data: true,
+            cluster: false,
         },
         eng.metrics_flags
     );
@@ -195,8 +197,9 @@ fn test_follower_do_append_entries_one_membership_entry() -> anyhow::Result<()> 
 
     assert_eq!(
         MetricsChangeFlags {
-            leader: false,
-            other_metrics: true
+            replication: false,
+            local_data: true,
+            cluster: true,
         },
         eng.metrics_flags
     );
@@ -276,8 +279,9 @@ fn test_follower_do_append_entries_three_membership_entries() -> anyhow::Result<
 
     assert_eq!(
         MetricsChangeFlags {
-            leader: false,
-            other_metrics: true
+            replication: false,
+            local_data: true,
+            cluster: true,
         },
         eng.metrics_flags
     );

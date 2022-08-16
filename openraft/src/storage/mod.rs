@@ -1,17 +1,20 @@
 //! The Raft storage interface and data types.
 
 mod helper;
+mod snapshot_signature;
 use std::fmt::Debug;
 use std::ops::RangeBounds;
 
 use async_trait::async_trait;
 pub use helper::StorageHelper;
+pub use snapshot_signature::SnapshotSignature;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncSeek;
 use tokio::io::AsyncWrite;
 
 use crate::defensive::check_range_matches_entries;
 use crate::membership::EffectiveMembership;
+use crate::node::Node;
 use crate::raft_types::SnapshotId;
 use crate::raft_types::StateMachineChanges;
 use crate::Entry;
@@ -23,27 +26,46 @@ use crate::Vote;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize), serde(bound = ""))]
-pub struct SnapshotMeta<NID: NodeId> {
-    // Log entries upto which this snapshot includes, inclusive.
+pub struct SnapshotMeta<NID, N>
+where
+    NID: NodeId,
+    N: Node,
+{
+    /// Log entries upto which this snapshot includes, inclusive.
     pub last_log_id: LogId<NID>,
 
-    // The last applied membership config.
-    pub last_membership: EffectiveMembership<NID>,
+    /// The last applied membership config.
+    pub last_membership: EffectiveMembership<NID, N>,
 
     /// To identify a snapshot when transferring.
     /// Caveat: even when two snapshot is built with the same `last_log_id`, they still could be different in bytes.
     pub snapshot_id: SnapshotId,
 }
 
-/// The data associated with the current snapshot.
-#[derive(Debug)]
-pub struct Snapshot<NID, S>
+impl<NID, N> SnapshotMeta<NID, N>
 where
     NID: NodeId,
+    N: Node,
+{
+    pub fn signature(&self) -> SnapshotSignature<NID> {
+        SnapshotSignature {
+            last_log_id: Some(self.last_log_id),
+            last_membership_log_id: self.last_membership.log_id,
+            snapshot_id: self.snapshot_id.clone(),
+        }
+    }
+}
+
+/// The data associated with the current snapshot.
+#[derive(Debug)]
+pub struct Snapshot<NID, N, S>
+where
+    NID: NodeId,
+    N: Node,
     S: AsyncRead + AsyncSeek + Send + Unpin + 'static,
 {
     /// metadata of a snapshot
-    pub meta: SnapshotMeta<NID>,
+    pub meta: SnapshotMeta<NID, N>,
 
     /// A read handle to the associated snapshot.
     pub snapshot: Box<S>,
@@ -136,7 +158,7 @@ where
     /// Building snapshot can be done by:
     /// - Performing log compaction, e.g. merge log entries that operates on the same key, like a LSM-tree does,
     /// - or by fetching a snapshot from the state machine.
-    async fn build_snapshot(&mut self) -> Result<Snapshot<C::NodeId, SD>, StorageError<C::NodeId>>;
+    async fn build_snapshot(&mut self) -> Result<Snapshot<C::NodeId, C::Node, SD>, StorageError<C::NodeId>>;
 
     // NOTES:
     // This interface is geared toward small file-based snapshots. However, not all snapshots can
@@ -205,7 +227,7 @@ where C: RaftTypeConfig
     // NOTE: This can be made into sync, provided all state machines will use atomic read or the like.
     async fn last_applied_state(
         &mut self,
-    ) -> Result<(Option<LogId<C::NodeId>>, EffectiveMembership<C::NodeId>), StorageError<C::NodeId>>;
+    ) -> Result<(Option<LogId<C::NodeId>>, EffectiveMembership<C::NodeId, C::Node>), StorageError<C::NodeId>>;
 
     /// Apply the given payload of entries to the state machine.
     ///
@@ -253,7 +275,7 @@ where C: RaftTypeConfig
     /// A snapshot created from an earlier call to `begin_receiving_snapshot` which provided the snapshot.
     async fn install_snapshot(
         &mut self,
-        meta: &SnapshotMeta<C::NodeId>,
+        meta: &SnapshotMeta<C::NodeId, C::Node>,
         snapshot: Box<Self::SnapshotData>,
     ) -> Result<StateMachineChanges<C>, StorageError<C::NodeId>>;
 
@@ -270,7 +292,7 @@ where C: RaftTypeConfig
     /// of the snapshot, which should be decoded for creating this method's response data.
     async fn get_current_snapshot(
         &mut self,
-    ) -> Result<Option<Snapshot<C::NodeId, Self::SnapshotData>>, StorageError<C::NodeId>>;
+    ) -> Result<Option<Snapshot<C::NodeId, C::Node, Self::SnapshotData>>, StorageError<C::NodeId>>;
 }
 
 /// APIs for debugging a store.
