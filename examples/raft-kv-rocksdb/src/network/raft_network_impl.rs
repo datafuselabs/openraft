@@ -72,7 +72,7 @@ impl RaftNetworkFactory<ExampleTypeConfig> for ExampleNetwork {
     ) -> Result<Self::Network, Self::ConnectionError> {
         dbg!(&node);
         let addr = format!("ws://{}", node.rpc_addr);
-        let client = Client::dial_websocket(&addr).await.ok();
+        let client = Some(Client::dial_websocket(&addr).await.map_err(|e| NetworkError::new(&e))?);
         Ok(ExampleNetworkConnection { addr, client, target })
     }
 }

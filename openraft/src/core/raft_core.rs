@@ -161,6 +161,9 @@ pub struct RaftCore<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<
     pub(crate) rx_shutdown: oneshot::Receiver<()>,
 
     pub(crate) span: Span,
+
+    /// Nodes we need to retry to connect to if we're the leader
+    failed_nodes: Vec<C::NodeId>,
 }
 
 pub(crate) type RaftSpawnHandle<NID> = JoinHandle<Result<(), Fatal<NID>>>;
@@ -205,6 +208,7 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
             rx_shutdown,
 
             span,
+            failed_nodes: Vec::new(),
         };
 
         tokio::spawn(this.main().instrument(trace_span!("spawn").or_current()))
@@ -1057,6 +1061,7 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn remove_all_replication(&mut self) {
         tracing::info!("remove all replication");
+        self.failed_nodes.clear();
 
         if let Some(l) = &mut self.leader_data {
             let nodes = std::mem::take(&mut l.nodes);
@@ -1577,6 +1582,30 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftRuntime
         Ent: RaftLogId<C::NodeId> + Sync + Send + 'e,
         &'e Ent: Into<Entry<C>>,
     {
+        // If we failed to connect  to oither replication nodes we  want to re-try the connection
+        // before executing the command.
+        // This ensures that cluster communications are reliably established even when a node isn't
+        // reachable during the leader promotion.
+        if !self.failed_nodes.is_empty() && self.leader_data.is_some() {
+            let mut nodes_to_try = Vec::new();
+            std::mem::swap(&mut nodes_to_try, &mut self.failed_nodes);
+            for node_id in nodes_to_try.drain(..) {
+                match self.spawn_replication_stream(node_id).await {
+                    Ok(state) => {
+                        if let Some(l) = &mut self.leader_data {
+                            l.nodes.insert(node_id, state);
+                        } else {
+                            unreachable!("it has to be a leader!!!");
+                        }
+                    }
+                    Err(e) => {
+                        self.failed_nodes.push(node_id);
+                        tracing::error!({node = % node_id}, "cannot connect to {:?}", e);
+                    }
+                };
+            }
+        }
+
         match cmd {
             Command::UpdateServerState { server_state } => {
                 if server_state == &ServerState::Leader {
@@ -1675,20 +1704,20 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftRuntime
 
                 // TODO: use _matched to initialize replication
                 for (node_id, _matched) in targets.iter() {
-                    let state = match self.spawn_replication_stream(*node_id).await {
-                        Ok(state) => state,
+                    match self.spawn_replication_stream(*node_id).await {
+                        Ok(state) => {
+                            if let Some(l) = &mut self.leader_data {
+                                l.nodes.insert(*node_id, state);
+                            } else {
+                                unreachable!("it has to be a leader!!!");
+                            }
+                        }
                         Err(e) => {
+                            self.failed_nodes.push(*node_id);
                             tracing::error!({node = % node_id}, "cannot connect to {:?}", e);
                             // cannot return Err, or raft fail completely
-                            continue;
                         }
                     };
-
-                    if let Some(l) = &mut self.leader_data {
-                        l.nodes.insert(*node_id, state);
-                    } else {
-                        unreachable!("it has to be a leader!!!");
-                    }
                 }
             }
             Command::UpdateMembership { .. } => {
