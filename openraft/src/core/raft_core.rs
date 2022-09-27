@@ -379,15 +379,32 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
             };
 
             // If we receive a response with a greater term, then revert to follower and abort this request.
-            if let AppendEntriesResponse::HigherVote(vote) = data {
-                // TODO: there is no guarantee the response vote is greater than local. Because local vote may already
-                //       changed.
-                assert!(vote > self.engine.state.vote);
-                self.engine.state.vote = vote;
-                // TODO(xp): deal with storage error
-                self.save_vote().await.unwrap();
-                // TODO(xp): if receives error about a higher term, it should stop at once?
-                self.set_target_state(ServerState::Follower);
+            if let AppendEntriesResponse::HigherVote(mut vote) = data {
+                if vote > self.engine.state.vote {
+                    std::mem::swap(&mut vote, &mut self.engine.state.vote);
+                    if let Err(err) = self.save_vote().await {
+                        tracing::error!(target = display(target), "{}", err);
+                        let _ = tx.send(Err(Fatal::StorageError(err).into()));
+                        return;
+                    }
+                    // TODO(xp): if receives error about a higher term, it should stop at once?
+                    self.set_target_state(ServerState::Follower);
+                } else {
+                    // assuming we have switched to follower already, it might be enough to issue a warning here
+                    tracing::warn!(
+                        target = display(target),
+                        "higher vote received: {} not greater than current state vote {}.",
+                        vote,
+                        self.engine.state.vote
+                    );
+                }
+                // we are no longer leader so error out
+                let _ = tx.send(Err(ForwardToLeader {
+                    leader_id: None,
+                    leader_node: None,
+                }
+                .into()));
+                return;
             }
 
             granted.insert(target);
