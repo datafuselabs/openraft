@@ -385,8 +385,8 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
                         // shouldn't happend due to the check above
                         tracing::warn!(target = display(target), "vote {vote} rejected: {e}");
                     }
-                    if let Err(e) = self.run_engine_commands::<Entry<C>>(&[]).await {
-                        let _ = tx.send(Err(CheckIsLeaderError::Fatal(Fatal::from(e))));
+                    if let Err(e) = self.run_engine_commands::<Entry<C>>(&[]).await.extract_fatal() {
+                        let _ = tx.send(Err(e.into()));
                         return;
                     }
                 } else {
