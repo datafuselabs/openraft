@@ -379,32 +379,25 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
             };
 
             // If we receive a response with a greater term, then revert to follower and abort this request.
-            if let AppendEntriesResponse::HigherVote(mut vote) = data {
-                if vote > self.engine.state.vote {
-                    std::mem::swap(&mut vote, &mut self.engine.state.vote);
-                    if let Err(err) = self.save_vote().await {
-                        tracing::error!(target = display(target), "{}", err);
-                        let _ = tx.send(Err(Fatal::StorageError(err).into()));
+            if let AppendEntriesResponse::HigherVote(vote) = data {
+                if self.does_vote_match(vote, "HigherVote during CheckIsLeader") {
+                    if let Err(e) = self.engine.handle_vote_change(&vote) {
+                        // shouldn't happend due to the check above
+                        tracing::warn!(target = display(target), "vote {vote} rejected: {e}");
+                    }
+                    if let Err(e) = self.run_engine_commands::<Entry<C>>(&[]).await {
+                        let _ = tx.send(Err(CheckIsLeaderError::Fatal(Fatal::from(e))));
                         return;
                     }
-                    // TODO(xp): if receives error about a higher term, it should stop at once?
-                    self.set_target_state(ServerState::Follower);
                 } else {
-                    // assuming we have switched to follower already, it might be enough to issue a warning here
-                    tracing::warn!(
-                        target = display(target),
-                        "higher vote received: {} not greater than current state vote {}.",
-                        vote,
-                        self.engine.state.vote
-                    );
+                    // simply ignore stale responses
+                    continue;
                 }
-                // we are no longer leader so error out
-                let _ = tx.send(Err(ForwardToLeader {
-                    leader_id: None,
-                    leader_node: None,
+                // we are no longer leader so error out early
+                if !self.engine.state.server_state.is_leader() {
+                    self.reject_with_forward_to_leader(tx);
+                    return;
                 }
-                .into()));
-                return;
             }
 
             granted.insert(target);
