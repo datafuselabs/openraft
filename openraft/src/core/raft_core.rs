@@ -751,12 +751,6 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
         Ok(())
     }
 
-    /// Save the Raft node's current hard state to disk.
-    #[tracing::instrument(level = "trace", skip(self))]
-    pub(crate) async fn save_vote(&mut self) -> Result<(), StorageError<C::NodeId>> {
-        self.storage.save_vote(&self.engine.state.vote).await
-    }
-
     /// Update core's target state, ensuring all invariants are upheld.
     #[tracing::instrument(level = "trace", skip(self), fields(id=display(self.id)))]
     pub(crate) fn set_target_state(&mut self, target_state: ServerState) {

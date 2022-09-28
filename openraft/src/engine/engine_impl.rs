@@ -1136,11 +1136,10 @@ where
             return Err(RejectVoteRequest::ByVote(self.state.vote));
         }
 
-        tracing::debug!(%vote, "vote is changing to" );
-
         // Grant the vote
 
         if vote > &self.state.vote {
+            tracing::debug!(%vote, "vote is changing to" );
             self.state.vote = *vote;
             self.push_command(Command::SaveVote { vote: *vote });
         }
