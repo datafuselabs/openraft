@@ -380,18 +380,14 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
 
             // If we receive a response with a greater term, then revert to follower and abort this request.
             if let AppendEntriesResponse::HigherVote(vote) = data {
-                if self.does_vote_match(vote, "HigherVote during CheckIsLeader") {
-                    if let Err(e) = self.engine.handle_vote_change(&vote) {
-                        // shouldn't happend due to the check above
-                        tracing::warn!(target = display(target), "vote {vote} rejected: {e}");
-                    }
-                    if let Err(e) = self.run_engine_commands::<Entry<C>>(&[]).await.extract_fatal() {
-                        let _ = tx.send(Err(e.into()));
-                        return;
-                    }
-                } else {
+                if let Err(e) = self.engine.handle_vote_change(&vote) {
+                    tracing::warn!(target = display(target), "vote {vote} rejected: {e}");
                     // simply ignore stale responses
                     continue;
+                }
+                if let Err(e) = self.run_engine_commands::<Entry<C>>(&[]).await.extract_fatal() {
+                    let _ = tx.send(Err(e.into()));
+                    return;
                 }
                 // we are no longer leader so error out early
                 if !self.engine.state.server_state.is_leader() {

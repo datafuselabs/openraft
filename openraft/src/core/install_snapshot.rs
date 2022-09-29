@@ -33,23 +33,15 @@ impl<C: RaftTypeConfig, N: RaftNetworkFactory<C>, S: RaftStorage<C>> RaftCore<C,
     ) -> Result<InstallSnapshotResponse<C::NodeId>, InstallSnapshotError<C::NodeId>> {
         tracing::debug!(req = display(req.summary()));
 
-        if req.vote < self.engine.state.vote {
+        if self.engine.handle_vote_change(&req.vote).is_err() {
             tracing::info!(?self.engine.state.vote, %req.vote, "InstallSnapshot RPC term is less than current term, ignoring it.");
-
             return Ok(InstallSnapshotResponse {
                 vote: self.engine.state.vote,
             });
         }
+        self.run_engine_commands::<Entry<C>>(&[]).await?;
 
         self.set_next_election_time(false);
-
-        if req.vote > self.engine.state.vote {
-            // with the check above it is safe to ignore any errors here, as they shouldn' happen
-            let _ = self.engine.handle_vote_change(&req.vote);
-            if let Err(e) = self.run_engine_commands::<Entry<C>>(&[]).await {
-                return Err(InstallSnapshotError::Fatal(e.into()));
-            }
-        }
 
         // Clear the state to None if it is building a snapshot locally.
         if let SnapshotState::Snapshotting { abort_handle, .. } = &mut self.snapshot_state {
