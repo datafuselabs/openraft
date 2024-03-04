@@ -4,8 +4,11 @@ use std::time::Duration;
 use anyhow::Result;
 use futures::stream::StreamExt;
 use maplit::btreeset;
+use openraft::AsyncRuntime;
 use openraft::Config;
 use openraft::LogIdOptionExt;
+use openraft::RaftTypeConfig;
+use openraft_memstore::TypeConfig;
 
 use crate::fixtures::init_default_ut_tracing;
 use crate::fixtures::RaftRouter;
@@ -64,7 +67,7 @@ async fn commit_joint_config_during_0_to_012() -> Result<()> {
 
     tracing::info!(log_index, "--- changing cluster config, should timeout");
 
-    tokio::spawn({
+    <TypeConfig as RaftTypeConfig>::AsyncRuntime::spawn({
         let router = router.clone();
         async move {
             let node = router.get_raft_handle(&0).unwrap();
@@ -124,7 +127,7 @@ async fn commit_joint_config_during_012_to_234() -> Result<()> {
     {
         let router = router.clone();
         // this is expected to be blocked since 3 and 4 are isolated.
-        tokio::spawn(
+        <TypeConfig as RaftTypeConfig>::AsyncRuntime::spawn(
             async move {
                 let node = router.get_raft_handle(&0)?;
                 node.change_membership([2, 3, 4], false).await?;

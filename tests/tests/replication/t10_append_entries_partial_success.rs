@@ -3,7 +3,10 @@ use std::time::Duration;
 
 use anyhow::Result;
 use maplit::btreeset;
+use openraft::AsyncRuntime;
 use openraft::Config;
+use openraft::RaftTypeConfig;
+use openraft_memstore::TypeConfig;
 
 use crate::fixtures::init_default_ut_tracing;
 use crate::fixtures::RaftRouter;
@@ -33,7 +36,7 @@ async fn append_entries_partial_success() -> Result<()> {
         router.set_append_entries_quota(Some(quota));
 
         let r = router.clone();
-        tokio::spawn(async move {
+        <TypeConfig as RaftTypeConfig>::AsyncRuntime::spawn(async move {
             // client request will be blocked due to limited quota=2
             r.client_request_many(0, "0", n as usize).await.unwrap();
         });

@@ -226,6 +226,7 @@ async fn check_logs<C, LS>(log_store: &mut LS, terms: Vec<u64>) -> Result<()>
 where
     C: RaftTypeConfig,
     LS: RaftLogStorage<C>,
+    C::NodeId: Sync + Send,
 {
     let logs = log_store.get_log_entries(..).await?;
     let skip = 0;

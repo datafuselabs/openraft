@@ -75,8 +75,13 @@ pub use network::RaftNetwork;
 pub use network::RaftNetworkFactory;
 pub use type_config::RaftTypeConfig;
 
+#[cfg(feature = "monoio")] pub use crate::async_runtime::monoio::MonoioInstant;
+#[cfg(feature = "monoio")] pub use crate::async_runtime::monoio::MonoioRuntime;
+#[cfg(not(feature = "monoio"))]
+pub use crate::async_runtime::tokio::TokioInstant;
+#[cfg(not(feature = "monoio"))]
+pub use crate::async_runtime::tokio::TokioRuntime;
 pub use crate::async_runtime::AsyncRuntime;
-pub use crate::async_runtime::TokioRuntime;
 pub use crate::change_members::ChangeMembers;
 pub use crate::config::Config;
 pub use crate::config::ConfigError;
@@ -85,7 +90,6 @@ pub use crate::core::ServerState;
 pub use crate::entry::Entry;
 pub use crate::entry::EntryPayload;
 pub use crate::instant::Instant;
-pub use crate::instant::TokioInstant;
 pub use crate::log_id::LogId;
 pub use crate::log_id::LogIdOptionExt;
 pub use crate::log_id::LogIndexOptionExt;

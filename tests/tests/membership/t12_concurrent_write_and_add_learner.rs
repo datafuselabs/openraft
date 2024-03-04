@@ -4,10 +4,13 @@ use std::time::Duration;
 
 use anyhow::Result;
 use maplit::btreeset;
+use openraft::AsyncRuntime;
 use openraft::Config;
 use openraft::LogIdOptionExt;
+use openraft::RaftTypeConfig;
 use openraft::ServerState;
 use openraft::Vote;
+use openraft_memstore::TypeConfig;
 
 use crate::fixtures::init_default_ut_tracing;
 use crate::fixtures::RaftRouter;
@@ -99,7 +102,7 @@ async fn concurrent_write_and_add_learner() -> Result<()> {
         let r = router.clone();
 
         let handle = {
-            tokio::spawn(
+            <TypeConfig as RaftTypeConfig>::AsyncRuntime::spawn(
                 async move {
                     r.add_learner(leader, 3).await.unwrap();
                     Ok::<(), anyhow::Error>(())

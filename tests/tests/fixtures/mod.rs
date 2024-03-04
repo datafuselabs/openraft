@@ -2,6 +2,7 @@
 
 #![allow(dead_code)]
 
+pub mod runtime;
 #[cfg(feature = "bt")] use std::backtrace::Backtrace;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -45,6 +46,7 @@ use openraft::raft::VoteResponse;
 use openraft::storage::Adaptor;
 use openraft::storage::RaftLogStorage;
 use openraft::storage::RaftStateMachine;
+use openraft::AsyncRuntime;
 use openraft::Config;
 use openraft::LogId;
 use openraft::LogIdOptionExt;
@@ -58,8 +60,6 @@ use openraft::RaftMetrics;
 use openraft::RaftState;
 use openraft::RaftTypeConfig;
 use openraft::ServerState;
-use openraft::TokioInstant;
-use openraft::TokioRuntime;
 use openraft::Vote;
 use openraft_memstore::ClientRequest;
 use openraft_memstore::ClientResponse;
@@ -312,7 +312,7 @@ impl TypedRaftRouter {
 
         let r = rand::random::<u64>() % send_delay;
         let timeout = Duration::from_millis(r);
-        tokio::time::sleep(timeout).await;
+        <TypeConfig as RaftTypeConfig>::AsyncRuntime::sleep(timeout).await;
     }
 
     pub fn set_append_entries_quota(&mut self, quota: Option<u64>) {
@@ -622,7 +622,11 @@ impl TypedRaftRouter {
         Ok(rst)
     }
 
-    pub fn wait(&self, node_id: &MemNodeId, timeout: Option<Duration>) -> Wait<MemNodeId, (), TokioRuntime> {
+    pub fn wait(
+        &self,
+        node_id: &MemNodeId,
+        timeout: Option<Duration>,
+    ) -> Wait<MemNodeId, (), <TypeConfig as RaftTypeConfig>::AsyncRuntime> {
         let node = {
             let rt = self.nodes.lock().unwrap();
             rt.get(node_id).expect("target node not found in routing table").clone().0
@@ -765,7 +769,11 @@ impl TypedRaftRouter {
     /// Send external request to the particular node.
     pub async fn with_raft_state<V, F>(&self, target: MemNodeId, func: F) -> Result<V, Fatal<MemNodeId>>
     where
-        F: FnOnce(&RaftState<MemNodeId, (), TokioInstant>) -> V + Send + 'static,
+        F: FnOnce(
+                &RaftState<MemNodeId, (), <<TypeConfig as RaftTypeConfig>::AsyncRuntime as AsyncRuntime>::Instant>,
+            ) -> V
+            + Send
+            + 'static,
         V: Send + 'static,
     {
         let r = self.get_raft_handle(&target).unwrap();
@@ -773,7 +781,11 @@ impl TypedRaftRouter {
     }
 
     /// Send external request to the particular node.
-    pub fn external_request<F: FnOnce(&RaftState<MemNodeId, (), TokioInstant>) + Send + 'static>(
+    pub fn external_request<
+        F: FnOnce(&RaftState<MemNodeId, (), <<TypeConfig as RaftTypeConfig>::AsyncRuntime as AsyncRuntime>::Instant>)
+            + Send
+            + 'static,
+    >(
         &self,
         target: MemNodeId,
         req: F,

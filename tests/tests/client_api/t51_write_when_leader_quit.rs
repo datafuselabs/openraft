@@ -8,13 +8,16 @@ use openraft::error::ForwardToLeader;
 use openraft::error::RaftError;
 use openraft::raft::AppendEntriesRequest;
 use openraft::testing::log_id;
+use openraft::AsyncRuntime;
 use openraft::Config;
+use openraft::RaftTypeConfig;
 use openraft::Vote;
 use openraft_memstore::ClientRequest;
 use openraft_memstore::IntoMemClientRequest;
-use tokio::sync::oneshot;
+use openraft_memstore::TypeConfig;
 
 use crate::fixtures::init_default_ut_tracing;
+use crate::fixtures::runtime::oneshot;
 use crate::fixtures::RaftRouter;
 
 /// Client write will receive a [`ForwardToLeader`] error because of log reversion, when leader
@@ -48,14 +51,14 @@ async fn write_when_leader_quit_and_log_revert() -> Result<()> {
     tracing::info!(log_index, "--- write a log in another task");
     {
         let n0 = router.get_raft_handle(&0)?;
-        tokio::spawn(async move {
+        <TypeConfig as RaftTypeConfig>::AsyncRuntime::spawn(async move {
             let res = n0.client_write(ClientRequest::make_request("cli", 1)).await;
             tx.send(res).unwrap();
         });
     }
 
     // wait for log to be appended on leader, and response channel is installed.
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    <TypeConfig as RaftTypeConfig>::AsyncRuntime::sleep(Duration::from_millis(500)).await;
 
     tracing::info!(log_index, "--- force node 0 to give up leadership");
     {
@@ -122,14 +125,14 @@ async fn write_when_leader_switched() -> Result<()> {
     tracing::info!(log_index, "--- write a log in another task");
     {
         let n0 = router.get_raft_handle(&0)?;
-        tokio::spawn(async move {
+        <TypeConfig as RaftTypeConfig>::AsyncRuntime::spawn(async move {
             let res = n0.client_write(ClientRequest::make_request("cli", 1)).await;
             tx.send(res).unwrap();
         });
     }
 
     // wait for log to be appended on leader, and response channel is installed.
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    <TypeConfig as RaftTypeConfig>::AsyncRuntime::sleep(Duration::from_millis(500)).await;
 
     tracing::info!(log_index, "--- force node 0 to give up leadership, inform it to commit");
     {

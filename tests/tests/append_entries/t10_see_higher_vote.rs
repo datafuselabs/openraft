@@ -7,13 +7,15 @@ use openraft::network::RPCOption;
 use openraft::network::RaftNetwork;
 use openraft::network::RaftNetworkFactory;
 use openraft::raft::VoteRequest;
+use openraft::AsyncRuntime;
 use openraft::CommittedLeaderId;
 use openraft::Config;
 use openraft::LogId;
+use openraft::RaftTypeConfig;
 use openraft::ServerState;
 use openraft::Vote;
 use openraft_memstore::ClientRequest;
-use tokio::time::sleep;
+use openraft_memstore::TypeConfig;
 
 use crate::fixtures::init_default_ut_tracing;
 use crate::fixtures::RaftRouter;
@@ -39,7 +41,7 @@ async fn append_sees_higher_vote() -> Result<()> {
     tracing::info!("--- upgrade vote on node-1");
     {
         // Let leader lease expire
-        sleep(Duration::from_millis(800)).await;
+        <TypeConfig as RaftTypeConfig>::AsyncRuntime::sleep(Duration::from_millis(800)).await;
 
         let option = RPCOption::new(Duration::from_millis(1_000));
 
@@ -66,7 +68,7 @@ async fn append_sees_higher_vote() -> Result<()> {
         router.wait(&0, timeout()).state(ServerState::Leader, "node-0 is leader").await?;
 
         let n0 = router.get_raft_handle(&0)?;
-        tokio::spawn(async move {
+        <TypeConfig as RaftTypeConfig>::AsyncRuntime::spawn(async move {
             let res = n0
                 .client_write(ClientRequest {
                     client: "0".to_string(),
@@ -78,7 +80,7 @@ async fn append_sees_higher_vote() -> Result<()> {
             tracing::debug!("--- client_write res: {:?}", res);
         });
 
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        <TypeConfig as RaftTypeConfig>::AsyncRuntime::sleep(Duration::from_millis(500)).await;
 
         router
             .wait(&0, timeout())

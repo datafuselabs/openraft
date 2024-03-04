@@ -9,9 +9,12 @@ use openraft::network::RaftNetworkFactory;
 use openraft::raft::AppendEntriesRequest;
 use openraft::testing::blank_ent;
 use openraft::testing::log_id;
+use openraft::AsyncRuntime;
 use openraft::Config;
+use openraft::RaftTypeConfig;
 use openraft::Vote;
 use openraft_memstore::BlockOperation;
+use openraft_memstore::TypeConfig;
 
 use crate::fixtures::init_default_ut_tracing;
 use crate::fixtures::RaftRouter;
@@ -50,7 +53,7 @@ async fn building_snapshot_does_not_block_apply() -> Result<()> {
         follower.trigger().snapshot().await?;
 
         tracing::info!(log_index, "--- sleep 500 ms to make sure snapshot is started");
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        <TypeConfig as RaftTypeConfig>::AsyncRuntime::sleep(Duration::from_millis(500)).await;
 
         let res = router
             .wait(&1, Some(Duration::from_millis(500)))
@@ -78,7 +81,7 @@ async fn building_snapshot_does_not_block_apply() -> Result<()> {
         let option = RPCOption::new(Duration::from_millis(1_000));
 
         let fu = cli.append_entries(rpc, option);
-        let fu = tokio::time::timeout(Duration::from_millis(500), fu);
+        let fu = <TypeConfig as RaftTypeConfig>::AsyncRuntime::timeout(Duration::from_millis(500), fu);
         let resp = fu.await??;
         assert!(resp.is_success());
 

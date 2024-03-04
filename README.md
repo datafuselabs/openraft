@@ -1,7 +1,8 @@
 <div align="center">
     <h1>Openraft</h1>
     <h4>
-        Advanced <a href="https://raft.github.io/">Raft</a> in 🦀 Rust using <a href="https://tokio.rs/">Tokio</a>. Please ⭐ on <a href="https://github.com/datafuselabs/openraft">github</a>!
+        Advanced <a href="https://raft.github.io/">Raft</a> in 🦀 Rust using <a href="https://tokio.rs/">Tokio</a> or 
+<a href="https://github.com/bytedance/monoio/">Monoio</a>. Please ⭐ on <a href="https://github.com/datafuselabs/openraft">github</a>!
     </h4>
 
 
